@@ -1,8 +1,13 @@
 mod browser;
 mod files;
+mod git;
 mod palette;
+mod preview;
 mod render;
+mod tool_themes;
+mod ui;
 mod update;
+mod worker;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::{
@@ -31,6 +36,15 @@ struct Cli {
     palette: Option<PathBuf>,
     #[arg(long, global = true, value_enum, default_value = "auto")]
     color: ColorMode,
+    /// Interface density for lists and the file browser
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "comfortable",
+        env = "TNMY_DENSITY"
+    )]
+    density: ui::Density,
     #[command(subcommand)]
     command: Commands,
 }
@@ -53,6 +67,9 @@ enum Commands {
         zero: bool,
         #[arg(long, value_enum, default_value = "name")]
         sort: files::Sort,
+        /// Include bounded Git status metadata
+        #[arg(long)]
+        git: bool,
     },
     /// Browse folders, filter names and preview text
     Files {
@@ -60,6 +77,15 @@ enum Commands {
         path: PathBuf,
         #[arg(short, long)]
         all: bool,
+        /// Disable Git subprocesses
+        #[arg(long)]
+        no_git: bool,
+        /// Print the chosen path as NUL-terminated bytes; UI uses stderr
+        #[arg(long, conflicts_with = "pick_directory")]
+        pick: bool,
+        /// Choose a directory for shell integration
+        #[arg(long)]
+        pick_directory: bool,
     },
     /// Check palette discovery and terminal capabilities
     Doctor {
@@ -67,19 +93,30 @@ enum Commands {
         json: bool,
     },
     /// Show the shared Material color roles
-    Theme,
+    Theme(tool_themes::Options),
     /// Run nh with a clear operation header and a persistent result
     Update(update::Args),
 }
 
 fn run(cli: Cli) -> io::Result<u8> {
     let theme = palette::Theme::load(cli.palette.as_deref())?;
+    let picker = matches!(
+        &cli.command,
+        Commands::Files { pick: true, .. }
+            | Commands::Files {
+                pick_directory: true,
+                ..
+            }
+    );
     let styled = match cli.color {
         ColorMode::Always => true,
         ColorMode::Never => false,
         ColorMode::Auto => {
-            io::stdout().is_terminal()
-                && std::env::var_os("NO_COLOR").is_none()
+            (if picker {
+                io::stderr().is_terminal()
+            } else {
+                io::stdout().is_terminal()
+            }) && std::env::var_os("NO_COLOR").is_none()
                 && std::env::var("TERM").as_deref() != Ok("dumb")
         }
     };
@@ -94,18 +131,51 @@ fn run(cli: Cli) -> io::Result<u8> {
             json,
             zero,
             sort,
+            git,
         } => {
+            let mut git_cache = git::Cache::default();
             let stdout = io::stdout();
             let mut out = stdout.lock();
             let mut failed = false;
             // Streaming output may already have started when a later path fails.
             let mut entries = Vec::new();
             for path in &paths {
-                match files::read(path, all, sort) {
-                    Ok(found) if json => entries.extend(found),
-                    Ok(found) => {
-                        render::listing(&mut out, path, &found, long, zero, styled, &theme)?
+                let result = files::read(path, all, sort).map(|mut entries| {
+                    if git {
+                        let directory = if path.is_dir() {
+                            path.as_path()
+                        } else {
+                            path.parent().unwrap_or(std::path::Path::new("."))
+                        };
+                        if let Ok(directory) = std::fs::canonicalize(directory) {
+                            let snapshot =
+                                git_cache.scan(&directory, false, &worker::Cancel::fresh());
+                            for entry in &mut entries {
+                                let full =
+                                    directory.join(entry.path.file_name().unwrap_or_default());
+                                let label = snapshot.label(&full);
+                                if label != "  " {
+                                    entry.git_status = Some(label.into());
+                                }
+                            }
+                        }
                     }
+                    entries
+                });
+                match result {
+                    Ok(found) if json => entries.extend(found),
+                    Ok(found) => render::listing(
+                        &mut out,
+                        path,
+                        &found,
+                        render::ListOptions {
+                            long,
+                            zero,
+                            styled,
+                            density: cli.density,
+                        },
+                        &theme,
+                    )?,
                     Err(e) => {
                         eprintln!("tnmy: {}: {e}", render::safe(&path.to_string_lossy()));
                         failed = true;
@@ -120,16 +190,53 @@ fn run(cli: Cli) -> io::Result<u8> {
             }
             Ok(u8::from(failed))
         }
-        Commands::Files { path, all } => {
+        Commands::Files {
+            path,
+            all,
+            no_git,
+            pick,
+            pick_directory,
+        } => {
             if !io::stdin().is_terminal()
-                || !io::stdout().is_terminal()
+                || !io::stderr().is_terminal()
+                || (!picker && !io::stdout().is_terminal())
                 || std::env::var("TERM").as_deref() == Ok("dumb")
             {
                 return Err(io::Error::other(
                     "files needs an interactive terminal; use tnmy ls for redirected output",
                 ));
             }
-            browser::run(path, all, theme, styled)?;
+            let mode = if pick {
+                browser::Pick::Path
+            } else if pick_directory {
+                browser::Pick::Directory
+            } else {
+                browser::Pick::None
+            };
+            let selected = browser::run(
+                browser::Options {
+                    path,
+                    all,
+                    density: cli.density,
+                    git: !no_git,
+                    pick: mode,
+                },
+                theme,
+                styled,
+            )?;
+            if let Some(path) = selected {
+                let mut out = io::stdout().lock();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    out.write_all(path.as_os_str().as_bytes())?;
+                }
+                #[cfg(not(unix))]
+                out.write_all(path.to_string_lossy().as_bytes())?;
+                out.write_all(&[0])?;
+            } else if picker {
+                return Ok(130);
+            }
             Ok(0)
         }
         Commands::Doctor { json } => {
@@ -148,8 +255,31 @@ fn run(cli: Cli) -> io::Result<u8> {
             }
             Ok(0)
         }
-        Commands::Theme => {
-            render::theme(&theme, styled)?;
+        Commands::Theme(options) => {
+            if let Some(path) = &options.export {
+                tool_themes::export(&theme, path, options.build_bat)?;
+            }
+            if options.check_contrast {
+                let report = tool_themes::contrasts(&theme);
+                if options.json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    for pair in &report {
+                        println!(
+                            "{} / {}: {:.2}:1 → {:.2}:1{}",
+                            pair.foreground,
+                            pair.background,
+                            pair.original,
+                            pair.effective,
+                            if pair.adjusted { " (adjusted)" } else { "" }
+                        );
+                    }
+                }
+                return Ok(u8::from(report.iter().any(|p| p.effective < 4.5)));
+            }
+            if options.export.is_none() {
+                render::theme(&theme, styled)?;
+            }
             Ok(0)
         }
         Commands::Update(args) => update::run(args, styled, &theme),

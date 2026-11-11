@@ -14,17 +14,43 @@
         pkgs:
         pkgs.rustPlatform.buildRustPackage {
           pname = "terminal-new-my";
-          version = "0.1.0";
-          src = nixpkgs.lib.cleanSource ./.;
+          version = "0.2.0";
+          src = nixpkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = nixpkgs.lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              ./src
+              ./tests
+              ./tools
+              ./integrations
+            ];
+          };
           cargoLock.lockFile = ./Cargo.lock;
-          nativeCheckInputs = [ pkgs.python3 ];
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          nativeCheckInputs = [
+            pkgs.python3
+            pkgs.gitMinimal
+            pkgs.fish
+            pkgs.eza
+            pkgs.bat
+            pkgs.fzf
+            pkgs.delta
+          ];
           preCheck = ''
             export TNMY_TEST_SH=${pkgs.runtimeShell}
           '';
           postCheck = ''
             python3 tools/pty-check.py target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/tnmy
+            python3 tools/integration-check.py target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/tnmy
           '';
           postInstall = ''
+            wrapProgram $out/bin/tnmy --prefix PATH : ${
+              nixpkgs.lib.makeBinPath [
+                pkgs.gitMinimal
+                pkgs.bat
+              ]
+            }
             install -Dm644 integrations/fish/tnmy.fish $out/share/terminal-new-my/tnmy.fish
             install -Dm644 integrations/fish/completions/tnmy.fish $out/share/fish/vendor_completions.d/tnmy.fish
           '';
@@ -76,6 +102,12 @@
               clippy
               fish
               pkg-config
+              python3
+              git
+              bat
+              eza
+              fzf
+              delta
             ];
           };
         }

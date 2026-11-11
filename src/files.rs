@@ -23,6 +23,8 @@ pub struct Entry {
     pub link_target: Option<PathBuf>,
     pub permissions: u32,
     pub directory: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_status: Option<String>,
 }
 
 fn entry(path: PathBuf) -> io::Result<Entry> {
@@ -64,16 +66,32 @@ fn entry(path: PathBuf) -> io::Result<Entry> {
         },
         path,
         permissions,
+        git_status: None,
     })
 }
 
 pub fn read(path: &Path, all: bool, sort: Sort) -> io::Result<Vec<Entry>> {
+    read_cancel(path, all, sort, &crate::worker::Cancel::fresh())
+}
+
+pub fn read_cancel(
+    path: &Path,
+    all: bool,
+    sort: Sort,
+    cancel: &crate::worker::Cancel,
+) -> io::Result<Vec<Entry>> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_dir() {
         return Ok(vec![entry(path.into())?]);
     }
     let mut entries = Vec::new();
     for child in fs::read_dir(path)? {
+        if cancel.cancelled() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "directory load cancelled",
+            ));
+        }
         let child = child?;
         if !all && child.file_name().as_encoded_bytes().first() == Some(&b'.') {
             continue;
@@ -81,16 +99,17 @@ pub fn read(path: &Path, all: bool, sort: Sort) -> io::Result<Vec<Entry>> {
         // Surface metadata errors instead of returning an apparently complete list.
         entries.push(entry(child.path())?);
     }
-    entries.sort_by(|a, b| {
-        b.directory
-            .cmp(&a.directory)
-            .then_with(|| match sort {
-                Sort::Name => std::cmp::Ordering::Equal,
-                Sort::Size => b.size.cmp(&a.size),
-                Sort::Modified => b.modified.cmp(&a.modified),
-            })
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            .then_with(|| a.path.cmp(&b.path))
+    entries.sort_by_cached_key(|entry| {
+        (
+            !entry.directory,
+            match sort {
+                Sort::Name => 0,
+                Sort::Size => u64::MAX - entry.size,
+                Sort::Modified => u64::MAX - entry.modified.unwrap_or(0),
+            },
+            entry.name.to_lowercase(),
+            entry.path.clone(),
+        )
     });
     Ok(entries)
 }

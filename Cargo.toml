@@ -1,6 +1,6 @@
 [package]
 name = "terminal-new-my"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A Material You command experience for fish and Kitty"
@@ -14,7 +14,8 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.6", features = ["derive", "env"] }
 crossterm = "0.29"
-ratatui = "0.30"
+# Exact wrapped-line counts keep preview scrolling correct for long Unicode lines.
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-width = "0.2"

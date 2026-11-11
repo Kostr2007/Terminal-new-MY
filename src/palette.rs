@@ -73,6 +73,29 @@ impl Default for Theme {
 }
 
 impl Theme {
+    pub fn contrast(&self, fg: &str, bg: &str) -> f64 {
+        contrast(self.color(fg), self.color(bg))
+    }
+
+    /// Keep semantic accents when legible; otherwise fall back to readable text.
+    pub fn accessible(&self, fg: &str, bg: &str) -> Color {
+        let background = self.color(bg);
+        let foreground = self.color(fg);
+        if contrast(foreground, background) >= 4.5 {
+            return foreground;
+        }
+        let text = self.color("on_surface");
+        if contrast(text, background) >= 4.5 {
+            return text;
+        }
+        let black = Color::Rgb(0, 0, 0);
+        let white = Color::Rgb(255, 255, 255);
+        if contrast(black, background) > contrast(white, background) {
+            black
+        } else {
+            white
+        }
+    }
     pub fn load(explicit: Option<&Path>) -> io::Result<Self> {
         if let Some(path) = explicit {
             return Self::from_path(path);
@@ -162,7 +185,7 @@ impl Theme {
         if !enabled {
             return text.into();
         }
-        let Color::Rgb(r, g, b) = self.color(fg) else {
+        let Color::Rgb(r, g, b) = self.accessible(fg, bg.unwrap_or("surface")) else {
             unreachable!()
         };
         let mut result = format!("\x1b[38;2;{r};{g};{b}m");
@@ -178,9 +201,55 @@ impl Theme {
     }
 }
 
+pub fn contrast(a: Color, b: Color) -> f64 {
+    fn luminance(color: Color) -> f64 {
+        let Color::Rgb(r, g, b) = color else {
+            return 0.0;
+        };
+        let linear = |n: u8| {
+            let n = f64::from(n) / 255.0;
+            if n <= 0.04045 {
+                n / 12.92
+            } else {
+                ((n + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+    let a = luminance(a);
+    let b = luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn text_is_legible_for_six_generated_palettes_and_low_contrast_overrides() {
+        for seed in ["purple", "blue", "green"] {
+            for mode in ["dark", "light"] {
+                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("tests/palettes/{seed}-{mode}.json"));
+                let theme = Theme::load(Some(&path)).unwrap();
+                for pair in crate::tool_themes::contrasts(&theme) {
+                    assert!(
+                        pair.effective >= 4.5,
+                        "{seed} {mode}: {} / {}",
+                        pair.foreground,
+                        pair.background
+                    );
+                }
+            }
+        }
+        let mut theme = Theme::default();
+        for value in theme.colors.values_mut() {
+            *value = "#808080".into();
+        }
+        for pair in crate::tool_themes::contrasts(&theme) {
+            assert!(pair.adjusted);
+            assert!(pair.effective >= 4.5);
+        }
+    }
     #[test]
     fn validates_hex_without_panicking_on_unicode() {
         assert_eq!(rgb("#1234AB"), Some((18, 52, 171)));

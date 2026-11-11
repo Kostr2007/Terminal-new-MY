@@ -45,15 +45,26 @@ pub fn role(entry: &Entry) -> &'static str {
     }
 }
 
+pub struct ListOptions {
+    pub long: bool,
+    pub zero: bool,
+    pub styled: bool,
+    pub density: crate::ui::Density,
+}
+
 pub fn listing(
     out: &mut impl Write,
     path: &Path,
     entries: &[Entry],
-    long: bool,
-    zero: bool,
-    styled: bool,
+    options: ListOptions,
     theme: &Theme,
 ) -> io::Result<()> {
+    let ListOptions {
+        long,
+        zero,
+        styled,
+        density,
+    } = options;
     if zero {
         for entry in entries {
             #[cfg(unix)]
@@ -99,7 +110,11 @@ pub fn listing(
     for entry in entries {
         let name = safe(&entry.name);
         if styled {
-            let badge = format!(" {:7} ", entry.kind);
+            let badge = format!(
+                " {:5} {} ",
+                entry.kind,
+                entry.git_status.as_deref().unwrap_or("  ")
+            );
             let meta = if long {
                 format!(
                     " {:04o} {:>10}  ",
@@ -143,6 +158,9 @@ pub fn listing(
             )?;
         } else {
             writeln!(out, "{name}")?;
+        }
+        if styled && matches!(density, crate::ui::Density::Comfortable) {
+            writeln!(out)?;
         }
     }
     if styled {

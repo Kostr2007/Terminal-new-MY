@@ -11,10 +11,120 @@ fn command(home: &TempDir) -> Command {
         .env("XDG_CONFIG_HOME", home.path().join("config"))
         .env("XDG_STATE_HOME", home.path().join("state"))
         .env_remove("TNMY_PALETTE")
+        .env_remove("TNMY_DENSITY")
         .env_remove("MYT_PALETTE")
         .env_remove("MYT_THEME_DIR")
         .env_remove("MYT_CONFIG");
     command
+}
+
+#[test]
+fn git_metadata_matches_real_index_and_untracked_paths() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::write(dir.path().join("staged.txt"), "staged").unwrap();
+    fs::write(dir.path().join("новый\nfile"), "untracked").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["add", "staged.txt"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = command(&home)
+        .args(["ls", "--git", "--json"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        entries.iter().find(|e| e["name"] == "staged.txt").unwrap()["git_status"],
+        "A "
+    );
+    assert_eq!(
+        entries.iter().find(|e| e["name"] == "новый\nfile").unwrap()["git_status"],
+        "??"
+    );
+}
+
+#[test]
+fn exports_shared_themes_without_touching_other_configuration() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let output = command(&home)
+        .args(["theme", "--export"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    for file in [
+        "eza/theme.yml",
+        "bat/themes/TerminalNewMY.tmTheme",
+        "fzf.opts",
+        "delta.gitconfig",
+        "delta.args",
+        "manifest.json",
+    ] {
+        assert!(dir.path().join(file).is_file());
+    }
+    assert!(!home.path().join("config").exists());
+    assert!(
+        fs::read(dir.path().join("delta.args"))
+            .unwrap()
+            .ends_with(&[0])
+    );
+}
+
+#[test]
+fn contrast_report_has_accessible_effective_pairs() {
+    let home = tempfile::tempdir().unwrap();
+    let output = command(&home)
+        .args(["theme", "--check-contrast", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report.len(), 8);
+    assert!(
+        report
+            .iter()
+            .all(|pair| pair["effective"].as_f64().unwrap() >= 4.5)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hung_git_has_a_deadline_and_is_killed() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let shell = std::env::var("TNMY_TEST_SH").unwrap_or_else(|_| "/bin/sh".into());
+    let fake = home.path().join("git");
+    fs::write(&fake, format!("#!{shell}\nwhile :; do :; done\n")).unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(dir.path().join("file"), "").unwrap();
+    let start = std::time::Instant::now();
+    let output = command(&home)
+        .env("PATH", home.path())
+        .args(["ls", "--git", "--json"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(start.elapsed() < std::time::Duration::from_secs(3));
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(entries.len(), 1);
 }
 fn text(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).unwrap()
