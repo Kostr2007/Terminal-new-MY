@@ -1,0 +1,17 @@
+complete -c tnmy -f
+complete -c tnmy -n 'not __fish_seen_subcommand_from ls files doctor theme update' -a 'ls files doctor theme update'
+complete -c tnmy -l palette -r -d 'Material-You-Terminal palette.json'
+complete -c tnmy -l color -x -a 'auto always never'
+complete -c tnmy -s h -l help -d 'Show help'
+complete -c tnmy -s V -l version -d 'Show version'
+complete -c tnmy -n '__fish_seen_subcommand_from ls files' -s a -l all -d 'Show hidden entries'
+complete -c tnmy -n '__fish_seen_subcommand_from ls' -s l -l long -d 'Include file metadata'
+complete -c tnmy -n '__fish_seen_subcommand_from ls' -s 0 -l zero -d 'NUL-separated raw paths'
+complete -c tnmy -n '__fish_seen_subcommand_from ls doctor' -l json -d 'Structured JSON output'
+complete -c tnmy -n '__fish_seen_subcommand_from ls' -l sort -x -a 'name size modified'
+complete -c tnmy -n '__fish_seen_subcommand_from ls' -F
+complete -c tnmy -n '__fish_seen_subcommand_from files' -a '(__fish_complete_directories)'
+complete -c tnmy -n '__fish_seen_subcommand_from update' -l flake -r -d 'Flake reference for nh'
+complete -c tnmy -n '__fish_seen_subcommand_from update' -l refresh -d 'Update flake inputs before rebuild'
+complete -c tnmy -n '__fish_seen_subcommand_from update' -l action -x -a 'build test switch boot'
+complete -c tnmy -n '__fish_seen_subcommand_from update' -l dry-run -d 'Print arguments without running nh'
