@@ -184,6 +184,11 @@ with tempfile.TemporaryDirectory() as temporary:
     assert b"example.txt" in tree
     assert b"\x1b_Ga=f,I=" in tree and b"s=2,c=1" in tree
     assert b"\x1b[?1049h" not in tree
+    frames = tree.split(b"\x1b[?2026h")[1:]
+    assert len(frames) >= 5
+    name_frames = [frame for frame in frames if b"example.txt" in frame]
+    assert len(set(name_frames)) >= 3, "filename should be visible across changing frames"
+    assert any(b"    \x1b[38;2" in frame for frame in name_frames), "filename row should be offset during entrance"
     for args, settings in (
         (["tree", "--no-motion", str(root)], env),
         (["tree", str(root)], dict(env, TNMY_REDUCED_MOTION="1")),
@@ -192,6 +197,7 @@ with tempfile.TemporaryDirectory() as temporary:
         code, still_tree = kitty_output(args, settings)
         assert code == 0 and b"\x1b_Ga=p,I=" in still_tree
         assert b"\x1b_Ga=f,I=" not in still_tree and b"example.txt" in still_tree
+        assert b"\x1b[?2026h" not in still_tree
     code, text_tree = kitty_output(["tree", str(root)], dict(env, TERM="xterm-256color"))
     assert code == 0 and b"example.txt" in text_tree and b"\x1b_G" not in text_tree
 

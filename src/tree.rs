@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Args)]
 pub struct Options {
@@ -27,11 +28,120 @@ pub struct Options {
 
 const WAVE_SIZE: usize = 4;
 const WAVES: usize = 3;
-const STAGGER: Duration = Duration::from_millis(18);
+const TEXT_ROWS: usize = 6;
+const REVEAL: Duration = Duration::from_millis(120);
+const FRAME: Duration = Duration::from_millis(20);
+const TRAVEL: usize = 4;
+
+struct Row {
+    prefix: String,
+    branch: &'static str,
+    label: String,
+    suffix: String,
+    role: &'static str,
+    kind: usize,
+    number: usize,
+}
+
+impl Row {
+    fn width(&self) -> usize {
+        self.prefix.width() + self.branch.width() + 2 + self.label.width() + self.suffix.width()
+    }
+}
+
+fn stdout_size() -> Option<(usize, usize)> {
+    let mut size = std::mem::MaybeUninit::<libc::winsize>::uninit();
+    // The animation is printed to stdout, which has already been checked for a TTY.
+    if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let size = unsafe { size.assume_init() };
+    Some((usize::from(size.ws_col), usize::from(size.ws_row)))
+}
+
+fn faded(
+    out: &mut impl Write,
+    theme: &Theme,
+    text: &str,
+    role: &str,
+    progress: f32,
+) -> io::Result<()> {
+    use ratatui::style::Color::Rgb;
+    let (Rgb(r, g, b), Rgb(br, bg, bb)) =
+        (theme.accessible(role, "surface"), theme.color("surface"))
+    else {
+        unreachable!("Material roles are RGB");
+    };
+    let mix =
+        |fg: u8, bg: u8| (f32::from(bg) + (f32::from(fg) - f32::from(bg)) * progress).round() as u8;
+    write!(
+        out,
+        "\x1b[38;2;{};{};{}m{text}\x1b[0m",
+        mix(r, br),
+        mix(g, bg),
+        mix(b, bb)
+    )
+}
+
+fn reveal(
+    out: &mut impl Write,
+    theme: &Theme,
+    row: &Row,
+    size: (usize, usize),
+) -> io::Result<bool> {
+    if row.width() + TRAVEL >= size.0 || stdout_size() != Some(size) {
+        return Ok(false);
+    }
+    // Paint only the current line, without scrolling or touching finished rows.
+    let start = Instant::now();
+    let mut frame = Vec::new();
+    let mut painted_width = 0usize;
+    for index in 0.. {
+        let target = (FRAME * index).min(REVEAL);
+        if let Some(wait) = (start + target).checked_duration_since(Instant::now()) {
+            std::thread::sleep(wait);
+        }
+        let elapsed = start.elapsed();
+        let current_size = stdout_size();
+        let finished = current_size != Some(size) || elapsed >= REVEAL;
+        frame.clear();
+        frame.write_all(b"\x1b[?2026h\r")?;
+        if let Some((width, _)) = current_size.filter(|&(width, _)| width > 0 && width < size.0) {
+            // Kitty reflows the preview when a window shrinks. Recover its
+            // first row before replacing it with the final, naturally wrapped text.
+            let wrapped = painted_width.saturating_sub(1) / width;
+            if wrapped != 0 {
+                write!(frame, "\x1b[{wrapped}A\x1b[J")?;
+            }
+        }
+        frame.write_all(b"\x1b[2K")?;
+        if !finished {
+            let progress = elapsed.as_secs_f32() / REVEAL.as_secs_f32();
+            // Quadratic easing keeps the displacement visible through the first frames.
+            let eased = 1. - (1. - progress).powi(2);
+            let shift = (TRAVEL as f32 * (1. - eased)).round() as usize;
+            painted_width = row.width() + shift;
+            write!(frame, "{:shift$}", "")?;
+            faded(&mut frame, theme, &row.prefix, "outline", eased)?;
+            faded(&mut frame, theme, row.branch, "outline", eased)?;
+            frame.write_all(b"  ")?;
+            faded(&mut frame, theme, &row.label, row.role, eased)?;
+            faded(&mut frame, theme, &row.suffix, "on_surface", eased)?;
+            frame.write_all(b"\x1b[?2026l")?;
+        }
+        out.write_all(&frame)?;
+        if finished {
+            // Keep this update open through the final text and Kitty placement.
+            return Ok(true);
+        }
+        out.flush()?;
+    }
+    unreachable!()
+}
 
 struct TreeGraphics {
     icons: [[Option<kitty::TreeIcon>; 3]; WAVES + 1],
-    start: Option<Instant>,
+    animated: bool,
 }
 
 impl TreeGraphics {
@@ -42,7 +152,7 @@ impl TreeGraphics {
         row: usize,
         kind: usize,
     ) -> io::Result<()> {
-        let wave = if self.start.is_some() {
+        let wave = if self.animated {
             ((row - 1) / WAVE_SIZE).min(WAVES)
         } else {
             WAVES
@@ -53,19 +163,6 @@ impl TreeGraphics {
         }
         slot.as_mut().expect("icon was uploaded").place(out, row)
     }
-
-    fn pace(&self, out: &mut impl Write, row: usize) -> io::Result<()> {
-        if let Some(start) = self.start.filter(|_| row <= WAVES * WAVE_SIZE) {
-            out.flush()?;
-            // Time from the first row, so a slow filesystem never adds delay.
-            if let Some(delay) =
-                (start + STAGGER * row as u32).checked_duration_since(Instant::now())
-            {
-                std::thread::sleep(delay);
-            }
-        }
-        Ok(())
-    }
 }
 
 struct Tree<'a, W> {
@@ -73,11 +170,44 @@ struct Tree<'a, W> {
     theme: &'a Theme,
     styled: bool,
     graphics: Option<TreeGraphics>,
+    motion_size: Option<(usize, usize)>,
     count: usize,
     failed: bool,
 }
 
 impl<W: Write> Tree<'_, W> {
+    fn write_row(&mut self, row: Row) -> io::Result<()> {
+        let synchronized = match self.motion_size.filter(|_| row.number <= TEXT_ROWS) {
+            Some(size) => reveal(&mut self.out, self.theme, &row, size)?,
+            None => false,
+        };
+        let result = (|| {
+            write!(
+                self.out,
+                "{}{}",
+                row.prefix,
+                self.theme.paint(row.branch, "outline", None, self.styled)
+            )?;
+            if let Some(graphics) = self.graphics.as_mut().filter(|_| row.number <= 160) {
+                graphics.place(&mut self.out, self.theme, row.number, row.kind)?;
+            }
+            writeln!(
+                self.out,
+                "{}{}",
+                self.theme.paint(&row.label, row.role, None, self.styled),
+                row.suffix
+            )
+        })();
+        let finish = if synchronized {
+            self.out
+                .write_all(b"\x1b[?2026l")
+                .and_then(|()| self.out.flush())
+        } else {
+            Ok(())
+        };
+        result.and(finish)
+    }
+
     fn branch(&mut self, path: &Path, prefix: &str, all: bool, depth: u8) -> io::Result<()> {
         let entries = match files::read(path, all, Sort::Name) {
             Ok(entries) => entries,
@@ -106,24 +236,12 @@ impl<W: Write> Tree<'_, W> {
                 break;
             }
             self.count += 1;
-            if let Some(graphics) = &self.graphics {
-                graphics.pace(&mut self.out, self.count)?;
-            }
             let last = index + 1 == len;
-            let branch = if last { "└─ " } else { "├─ " };
-            write!(
-                self.out,
-                "{prefix}{}",
-                self.theme.paint(branch, "outline", None, self.styled)
-            )?;
-            if let Some(graphics) = self.graphics.as_mut().filter(|_| self.count <= 160) {
-                let kind = match item.kind {
-                    "dir" => 0,
-                    "file" => 1,
-                    _ => 2,
-                };
-                graphics.place(&mut self.out, self.theme, self.count, kind)?;
-            }
+            let kind = match item.kind {
+                "dir" => 0,
+                "file" => 1,
+                _ => 2,
+            };
             let suffix = match item.kind {
                 "dir" => "/",
                 "link" => "@",
@@ -134,16 +252,16 @@ impl<W: Write> Tree<'_, W> {
                 .as_ref()
                 .map(|p| format!(" → {}", render::safe(&p.to_string_lossy())))
                 .unwrap_or_default();
-            writeln!(
-                self.out,
-                "{}{suffix}{target}",
-                self.theme.paint(
-                    &render::safe(&item.name),
-                    render::role(&item),
-                    None,
-                    self.styled
-                )
-            )?;
+            let row = Row {
+                prefix: prefix.into(),
+                branch: if last { "└─ " } else { "├─ " },
+                label: render::safe(&item.name),
+                suffix: format!("{suffix}{target}"),
+                kind,
+                role: render::role(&item),
+                number: self.count,
+            };
+            self.write_row(row)?;
             if item.kind == "dir" && depth > 1 {
                 self.branch(
                     &item.path,
@@ -174,14 +292,20 @@ pub fn run(options: Options, theme: &Theme, styled: bool, graphics: bool) -> io:
             styled
         )
     )?;
+    let animated = graphics && kitty::motion_enabled() && !options.no_motion;
+    let motion_size = (animated && styled)
+        .then(stdout_size)
+        .flatten()
+        .filter(|&(width, height)| width >= 24 && height >= 4);
     let mut tree = Tree {
         out,
         theme,
         styled,
         graphics: graphics.then(|| TreeGraphics {
             icons: Default::default(),
-            start: (kitty::motion_enabled() && !options.no_motion).then(Instant::now),
+            animated,
         }),
+        motion_size,
         count: 0,
         failed: false,
     };

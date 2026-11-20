@@ -1,5 +1,9 @@
 # Changes
 
+## 0.3.0-alpha.3
+
+- Slide and fade tree branches and filenames in place before handing off to the final scrollback output.
+
 ## 0.3.0-alpha.2
 
 - Cascading tree rows and palette-colored icons with a one-shot Kitty animation.
