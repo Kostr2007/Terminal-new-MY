@@ -42,8 +42,13 @@ fn transmit(out: &mut impl Write, parameters: &str, pixels: &[u8]) -> io::Result
     let data = STANDARD.encode(pixels);
     let chunks = data.as_bytes().chunks(4096);
     let count = chunks.len();
+    let continuation = if parameters.starts_with("a=f,") {
+        "a=f"
+    } else {
+        ""
+    };
     for (index, chunk) in chunks.enumerate() {
-        let keys = if index == 0 { parameters } else { "" };
+        let keys = if index == 0 { parameters } else { continuation };
         let separator = if keys.is_empty() { "" } else { "," };
         write!(
             out,
@@ -218,5 +223,18 @@ impl Sprite {
             Playback::Loop => "s=3,v=1,c=1",
         };
         write!(out, "\x1b_Ga=a,I={},{state},q=2\x1b\\", self.id)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::transmit;
+
+    #[test]
+    fn animation_continuations_keep_the_frame_action() {
+        let mut wire = Vec::new();
+        transmit(&mut wire, "a=f,I=1", &[0; 3073]).unwrap();
+        let wire = std::str::from_utf8(&wire).unwrap();
+        assert!(wire.starts_with("\x1b_Ga=f,I=1,q=2,m=1;"));
+        assert!(wire.contains("\x1b\\\x1b_Ga=f,q=2,m=0;"));
     }
 }

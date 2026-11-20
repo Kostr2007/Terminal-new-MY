@@ -25,6 +25,10 @@ impl Row {
         columns: usize,
         playback: kitty::Playback,
     ) -> io::Result<kitty::Sprite> {
+        // Kitty scales placements to the font. Bound the raster work when the
+        // window is zoomed, using the same scale factor on both pixel axes.
+        let scale = cell.0.div_ceil(16).max(cell.1.div_ceil(32));
+        let cell = (cell.0.div_ceil(scale), cell.1.div_ceil(scale));
         let size = (cell.0 * columns, cell.1);
         let fill = kitty::rgb(theme.color(self.fill));
         let accent = kitty::rgb(theme.color(self.accent));
