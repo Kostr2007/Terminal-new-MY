@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0-alpha.4
+
+- Stream tree entries without animation delays between rows.
+- Round the Kitty branch connectors, animate their tips and icons, and sweep over names with native frames, including at the end of large trees.
+- Use directory entry types without fetching unused file metadata.
+
 ## 0.3.0-alpha.3
 
 - Slide and fade tree branches and filenames in place before handing off to the final scrollback output.

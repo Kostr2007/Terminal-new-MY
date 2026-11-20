@@ -5,17 +5,17 @@ Material You для повседневной работы в терминале:
 Работает в [Kitty Material You](https://github.com/Kostr2007/Kitty-Material-You)
 и обычных терминалах с UTF-8.
 
-**v0.3.0-alpha.3** анимирует ветви и имена `mytree` внутри истории Kitty.
-В первых шести строках текст сдвигается на несколько ячеек до своего места
-и плавно набирает контраст. Иконки подхватывают палитру `myt` и завершают
-появление на своём финальном кадре. Готовое дерево можно выделить и скопировать.
-В длинном дереве движение ограничено первыми строками, а текст с переносами
-выводится сразу.
+**v0.3.0-alpha.4** выводит имена `mytree` без пауз между строками. В Kitty
+скруглённые ветви заканчиваются цветными точками, иконки раскрываются,
+а имена плавно проявляются слева направо. Kitty проигрывает короткий эффект
+и на последних строках большого дерева. Имена остаются выделяемым текстом
+в истории терминала. Для копирования дерева со знаками `├─` и `└─` подойдёт
+`tnmy --graphics never tree`. За вызов выводится до 1000 записей.
 
-![Каскад mytree в Kitty](docs/screenshots/kitty-tree-motion.gif)
+![Появление ветвей и имён mytree в Kitty](docs/screenshots/kitty-tree-motion.gif)
 
-Хореография основана на каскаде из [Card Motion Studio](https://github.com/Kostr2007/Material-You-Terminal/blob/main/tools/card_studio.py)
-и передаче кадров из [Logo Motion Studio](https://github.com/Kostr2007/Material-You-Terminal/blob/main/tools/logo_studio.py).
+Рост иконок использует кривую плавности из [Card Motion Studio](https://github.com/Kostr2007/Material-You-Terminal/blob/main/tools/card_studio.py),
+а передача кадров опирается на [Logo Motion Studio](https://github.com/Kostr2007/Material-You-Terminal/blob/main/tools/logo_studio.py).
 
 ```fish
 mytree -L 3

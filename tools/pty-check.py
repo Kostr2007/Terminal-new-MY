@@ -166,29 +166,46 @@ with tempfile.TemporaryDirectory() as temporary:
     plain = subprocess.check_output([BINARY, "--graphics", "kitty", "tree", "-L", "3", str(root)], env=env)
     assert b"\x1b_G" not in plain
     assert plain.count(b"example.txt") == 1 and b"link@" in plain
+    assert "└─ ".encode() in plain and "├─ ".encode() in plain
 
     def kitty_output(args, environment):
         master, slave = pty.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, 100, 0, 0))
         try:
-            with subprocess.Popen([BINARY, *args], stdin=slave, stdout=slave, stderr=slave, env=environment) as child:
-                output = drain(master, 0.5)
-                code = child.wait(timeout=5)
-                return code, output + drain(master)
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, 100, 1200, 600))
+                child = subprocess.Popen([BINARY, *args], stdin=slave, stdout=slave, stderr=slave, env=environment)
+            finally:
+                os.close(slave)
+            with child:
+                try:
+                    output = drain(master, 5)
+                    return child.wait(timeout=5), output
+                finally:
+                    if child.poll() is None:
+                        child.kill()
         finally:
             os.close(master)
-            os.close(slave)
 
     code, tree = kitty_output(["tree", str(root)], env)
     assert code == 0 and b"\x1b_Ga=t,I=" in tree and b"\x1b_Ga=p,I=" in tree
-    assert b"example.txt" in tree
-    assert b"\x1b_Ga=f,I=" in tree and b"s=2,c=1" in tree
-    assert b"\x1b[?1049h" not in tree
-    frames = tree.split(b"\x1b[?2026h")[1:]
-    assert len(frames) >= 5
-    name_frames = [frame for frame in frames if b"example.txt" in frame]
-    assert len(set(name_frames)) >= 3, "filename should be visible across changing frames"
-    assert any(b"    \x1b[38;2" in frame for frame in name_frames), "filename row should be offset during entrance"
+    assert tree.count(b"example.txt") == 1
+    assert b"\x1b_Ga=f," in tree and b"s=2,c=1" in tree
+    assert b"\x1b[?1049h" not in tree and b"\x1b[?2026h" not in tree
+    assert "└─ ".encode() not in tree and "├─ ".encode() not in tree
+
+    large = root / "large"
+    large.mkdir()
+    for index in range(1001):
+        (large / f"file-{index:05}.txt").touch()
+    code, large_tree = kitty_output(["tree", str(large)], env)
+    assert code == 0 and large_tree.count(b"file-") == 1000
+    assert b"file-01000.txt" not in large_tree and b"display limit reached" in large_tree
+    last_row = next(row for row in large_tree.split(b"\r\n") if b"file-00999.txt" in row)
+    assert last_row.count(b"\x1b_Ga=p,I=") == 3, "last row needs a branch, icon and label reveal"
+    assert b",p=1000," in last_row and b",z=1," in last_row
+    assert large_tree.index(last_row) < large_tree.index(b"s=2,c=1"), "play after writing the tree"
+    assert large_tree.count(b"\x1b_Ga=t,I=") == 3, "share each image across rows"
+
     for args, settings in (
         (["tree", "--no-motion", str(root)], env),
         (["tree", str(root)], dict(env, TNMY_REDUCED_MOTION="1")),
@@ -196,10 +213,11 @@ with tempfile.TemporaryDirectory() as temporary:
     ):
         code, still_tree = kitty_output(args, settings)
         assert code == 0 and b"\x1b_Ga=p,I=" in still_tree
-        assert b"\x1b_Ga=f,I=" not in still_tree and b"example.txt" in still_tree
-        assert b"\x1b[?2026h" not in still_tree
+        assert b"\x1b_Ga=f," not in still_tree and b"example.txt" in still_tree
+        assert b",z=1," not in still_tree and b"s=2,c=1" not in still_tree
     code, text_tree = kitty_output(["tree", str(root)], dict(env, TERM="xterm-256color"))
     assert code == 0 and b"example.txt" in text_tree and b"\x1b_G" not in text_tree
+    assert "└─ ".encode() in text_tree and "├─ ".encode() in text_tree
 
     shell = os.environ.get("TNMY_TEST_SH", "/bin/sh")
     nix = root / "nix"
@@ -220,4 +238,4 @@ exit 7
     code, still = kitty_output(["update", "--action", "build"], dict(env, TNMY_REDUCED_MOTION="1"))
     assert code == 7 and b"\x1b_Ga=T,I=" in still and b"\x1b_Ga=f,I=" not in still
     assert b"\x1b]9;4;" not in still
-    print("Kitty checks passed: animated and static tree, placements, redirected fallback, animated and static loaders, log and status")
+    print("Kitty checks passed: animated and static trees, last-row motion for 1,000 entries, text fallback, animated and static loaders, log and status")

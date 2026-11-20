@@ -8,6 +8,7 @@ mod preview;
 mod render;
 mod tool_themes;
 mod tree;
+mod tree_art;
 mod ui;
 mod update;
 mod worker;

@@ -1,6 +1,7 @@
 use crate::palette::Theme;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::ValueEnum;
+use flate2::{Compression, write::ZlibEncoder};
 use ratatui::style::Color;
 use std::{
     env,
@@ -56,7 +57,7 @@ fn transmit(out: &mut impl Write, parameters: &str, pixels: &[u8]) -> io::Result
     Ok(())
 }
 
-fn rgb(color: Color) -> [u8; 3] {
+pub fn rgb(color: Color) -> [u8; 3] {
     match color {
         Color::Rgb(r, g, b) => [r, g, b],
         _ => unreachable!("Material color is RGB"),
@@ -70,7 +71,11 @@ fn rounded(x: f32, y: f32, rect: [f32; 4], radius: f32) -> bool {
     dx * dx + dy * dy <= radius * radius
 }
 
-fn raster(width: usize, height: usize, sample: impl Fn(f32, f32) -> Option<[u8; 3]>) -> Vec<u8> {
+pub fn raster(
+    width: usize,
+    height: usize,
+    sample: impl Fn(f32, f32) -> Option<[u8; 3]>,
+) -> Vec<u8> {
     let mut pixels = Vec::with_capacity(width * height * 4);
     for y in 0..height {
         for x in 0..width {
@@ -97,7 +102,7 @@ pub fn motion_enabled() -> bool {
     env::var_os("TNMY_REDUCED_MOTION").is_none() && env::var_os("MYT_NO_ANIMATION").is_none()
 }
 
-fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
+pub fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
     let (foreground, background) = match kind {
         0 => ("on_primary_container", "primary_container"),
         1 => ("on_secondary_container", "secondary_container"),
@@ -105,8 +110,7 @@ fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
     };
     let fg = rgb(theme.accessible(foreground, background));
     let bg = rgb(theme.color(background));
-    // The cubic ease-out also drives the row reveal in Material-You-Terminal's
-    // card studio. The endpoint uses the exact geometry of the static icon.
+    // The cubic ease-out comes from Material-You-Terminal's card studio.
     let eased = 1. - (1. - progress).powi(3);
     let scale = 0.50 + 0.50 * eased;
     let mut pixels = raster(24, 24, |x, y| {
@@ -135,55 +139,66 @@ fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
     pixels
 }
 
-pub struct TreeIcon {
+/// An image shared by many output rows. Animation starts once after placement.
+pub struct Sprite {
     id: u32,
     animated: bool,
-    started: bool,
 }
 
-impl TreeIcon {
+impl Sprite {
     pub fn upload(
         out: &mut impl Write,
-        kind: usize,
-        theme: &Theme,
+        (width, height): (usize, usize),
         animated: bool,
+        frame: impl Fn(f32) -> Vec<u8>,
     ) -> io::Result<Self> {
         const STEPS: u8 = 7;
-        const GAP_MS: u8 = 40;
+        const GAP_MS: u8 = 36;
         let id = number()?;
-        let progress = if animated { 0. } else { 1. };
-        transmit(
-            out,
-            &format!("a=t,I={id},f=32,s=24,v=24"),
-            &icon_frame(kind, theme, progress),
-        )?;
+        let send = |out: &mut _, action: &str, pixels: Vec<u8>| -> io::Result<()> {
+            let mut compressed = ZlibEncoder::new(Vec::new(), Compression::fast());
+            compressed.write_all(&pixels)?;
+            transmit(
+                out,
+                &format!("{action},I={id},f=32,s={width},v={height},o=z"),
+                &compressed.finish()?,
+            )
+        };
+        send(out, "a=t", frame(if animated { 0. } else { 1. }))?;
         if animated {
             write!(out, "\x1b_Ga=a,I={id},r=1,z={GAP_MS},q=2\x1b\\")?;
+            let action = format!("a=f,X=1,z={GAP_MS}");
             for step in 1..=STEPS {
-                transmit(
-                    out,
-                    &format!("a=f,I={id},f=32,s=24,v=24,X=1,z={GAP_MS}"),
-                    &icon_frame(kind, theme, f32::from(step) / f32::from(STEPS)),
-                )?;
+                send(out, &action, frame(f32::from(step) / f32::from(STEPS)))?;
             }
         }
-        Ok(Self {
-            id,
-            animated,
-            started: false,
-        })
+        Ok(Self { id, animated })
     }
 
-    pub fn place(&mut self, out: &mut impl Write, placement: usize) -> io::Result<()> {
-        let id = self.id;
+    pub fn place(
+        &self,
+        out: &mut impl Write,
+        placement: usize,
+        columns: usize,
+        layer: i8,
+        crop_width: Option<usize>,
+    ) -> io::Result<()> {
         write!(
             out,
-            "\x1b_Ga=p,I={id},p={placement},c=2,r=1,C=1,q=2\x1b\\  "
+            "\x1b_Ga=p,I={},p={placement},c={columns},r=1,z={layer},C=1,q=2",
+            self.id
         )?;
-        if self.animated && !self.started {
-            // Loading mode holds the last frame while the image lives in scrollback.
-            write!(out, "\x1b_Ga=a,I={id},s=2,c=1,q=2\x1b\\")?;
-            self.started = true;
+        if let Some(width) = crop_width {
+            write!(out, ",w={width}")?;
+        }
+        out.write_all(b"\x1b\\")
+    }
+
+    pub fn play(&self, out: &mut impl Write) -> io::Result<()> {
+        if self.animated {
+            // Loading mode stops at the last frame. Moving the window or
+            // scrolling a placement back into view does not restart the effect.
+            write!(out, "\x1b_Ga=a,I={},s=2,c=1,q=2\x1b\\", self.id)?;
         }
         Ok(())
     }
