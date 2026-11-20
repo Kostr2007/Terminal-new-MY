@@ -14,7 +14,7 @@
         pkgs:
         pkgs.rustPlatform.buildRustPackage {
           pname = "terminal-new-my";
-          version = "0.3.0-alpha.6";
+          version = "0.3.0-alpha.7";
           src = nixpkgs.lib.fileset.toSource {
             root = ./.;
             fileset = nixpkgs.lib.fileset.unions [

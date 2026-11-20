@@ -1,17 +1,18 @@
+   /demo
+   Contents  ·  2  ·  Name  ·  main               Preview
+   ▰ Documents                                   Привет.md
+ › ▪ Привет.md   M                      128 B
+                                                 Material You
+                                                 Русский текст
 
-  Terminal New MY  /  files
-  /demo
-  2 entries · Name · Comfortable · Git: main
- ╭ Contents ───────────────────────────────────╮╭ Preview · line 1 ───────────────────────────────╮
- │      dir   Documents                        ││Привет.md                                        │
- │             folder · 0755                   ││                                                 │
- │›   M file  Привет.md                        ││Material You                                     │
- │             128 B · 0644                    ││Русский текст                                    │
- │                                             ││                                                 │
- │                                             ││                                                 │
- │                                             ││                                                 │
- │                                             ││                                                 │
- ╰─────────────────────────────────────────────╯╰─────────────────────────────────────────────────╯
- ╭ 2 matches ─────────────────────────────────────────────────────────────────────────────────────╮
- │ ↑↓ move · Enter open · / find · d density · ? keys · q exit                                    │
- ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+   ↑↓ move  ·  Enter open  ·  / find  ·  Tab preview  ·  ? keys  ·  q exit

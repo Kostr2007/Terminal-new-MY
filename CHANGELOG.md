@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0-alpha.7
+
+- Rebuild `myls` around connected folder and file sections, adaptive columns, and right-aligned metadata in the long view.
+- Grow rounded section surfaces from their accent rails through native Kitty frames while keeping names as selectable text.
+- Rework `myfiles` and `mycd` with a single-line path, one row per entry, and a rounded selection surface that follows keyboard focus in Kitty.
+
 ## 0.3.0-alpha.6
 
 - Render `myls` with reusable Kitty badges, palette-colored Git statuses and a single native name reveal after writing the list.

@@ -1,8 +1,9 @@
 use crate::{
-    file_art::{Icon, Viewport},
+    file_art::Viewport,
     kitty::{Playback, Sprite},
     palette::Theme,
     preview::Png,
+    surface_art::{Edge, Row},
 };
 use crossterm::{
     cursor::{MoveTo, RestorePosition, SavePosition},
@@ -14,6 +15,7 @@ use std::io::{self, Write};
 #[derive(Default)]
 pub struct Layout {
     pub badge: Option<Rect>,
+    pub selected: Option<Rect>,
     pub preview: Option<Rect>,
 }
 
@@ -45,6 +47,7 @@ impl Layer {
         &mut self,
         out: &mut W,
         area: Option<Rect>,
+        z: i8,
         upload: impl FnOnce(&mut W) -> io::Result<Sprite>,
     ) -> io::Result<()> {
         let Some(area) = area else {
@@ -59,11 +62,9 @@ impl Layer {
         }
         let (sprite, shown) = self.0.as_mut().expect("image uploaded");
         queue!(out, SavePosition, MoveTo(area.x, area.y))?;
-        sprite.place_in(out, 1, (area.width.into(), area.height.into()), 1, None)?;
+        sprite.place_in(out, 1, (area.width.into(), area.height.into()), z, None)?;
         queue!(out, RestorePosition)?;
-        if new {
-            sprite.play(out)?;
-        }
+        sprite.play(out)?;
         *shown = area;
         Ok(())
     }
@@ -71,6 +72,7 @@ impl Layer {
 
 pub struct Art {
     badge: Layer,
+    selected: Layer,
     preview: Layer,
     playback: Playback,
 }
@@ -79,6 +81,7 @@ impl Art {
     pub fn new(animated: bool) -> Self {
         Self {
             badge: Layer::default(),
+            selected: Layer::default(),
             preview: Layer::default(),
             playback: Playback::entrance(animated),
         }
@@ -86,15 +89,37 @@ impl Art {
 
     pub fn draw(&mut self, layout: Layout, image: Option<&Png>, theme: &Theme) -> io::Result<()> {
         let mut out = io::stderr().lock();
-        self.badge.present(&mut out, layout.badge, |out| {
-            Icon::Folder.upload(out, theme, self.playback)
-        })?;
-        let preview = layout.preview.zip(image).map(|(area, image)| {
-            let cell = Viewport::stderr().map_or((12, 24), |size| size.cell);
-            (fit(area, image.size, cell), image)
-        });
+        let cell = Viewport::stderr().map_or((12, 24), |size| size.cell);
+        for (layer, region, fill, accent) in [
+            (
+                &mut self.badge,
+                layout.badge,
+                "primary_container",
+                "on_primary_container",
+            ),
+            (
+                &mut self.selected,
+                layout.selected,
+                "secondary_container",
+                "tertiary",
+            ),
+        ] {
+            layer.present(&mut out, region, -1, |out| {
+                let columns = usize::from(region.expect("surface layout computed").width);
+                Row {
+                    fill,
+                    accent,
+                    edge: Edge::Single,
+                }
+                .upload(out, theme, cell, columns, self.playback)
+            })?;
+        }
+        let preview = layout
+            .preview
+            .zip(image)
+            .map(|(area, image)| (fit(area, image.size, cell), image));
         self.preview
-            .present(&mut out, preview.map(|(area, _)| area), |out| {
+            .present(&mut out, preview.map(|(area, _)| area), 1, |out| {
                 let (_, image) = preview.expect("PNG layout computed");
                 Sprite::png(out, image.size, &image.data)
             })?;
@@ -105,6 +130,7 @@ impl Art {
         let mut out = io::stderr().lock();
         if badge {
             self.badge.clear(&mut out)?;
+            self.selected.clear(&mut out)?;
         }
         if preview {
             self.preview.clear(&mut out)?;

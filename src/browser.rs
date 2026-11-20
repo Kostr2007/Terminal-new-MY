@@ -1,5 +1,6 @@
 use crate::{
     browser_art,
+    file_art::Icon,
     files::{self, Entry, Sort},
     git,
     palette::Theme,
@@ -14,11 +15,13 @@ use crossterm::{
 };
 use ratatui::{
     Frame, Terminal,
-    layout::{Constraint, Direction, Layout},
-    text::{Line, Span},
-    widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
+    layout::{Constraint, Layout, Rect},
+    style::Modifier,
+    text::Line,
+    widgets::{Block, Paragraph, Wrap},
 };
 use std::{io, path::PathBuf, time::Duration};
+use unicode_width::UnicodeWidthStr;
 
 struct Restore;
 fn unavailable_size_probe(error: &io::Error) -> bool {
@@ -123,191 +126,244 @@ impl App {
             Block::default().style(ui::style(theme, "on_surface", "surface", color)),
             area,
         );
-        let rows = Layout::default()
-            .margin(self.density.margin())
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(1),
-                Constraint::Length(3),
-            ])
-            .split(area);
+        let margin = u16::from(area.width >= 32 && matches!(self.density, Density::Comfortable));
+        let content = Rect::new(
+            area.x + margin,
+            area.y,
+            area.width.saturating_sub(2 * margin),
+            area.height,
+        );
+        let rows = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(if area.width < 70 { 2 } else { 1 }),
+        ])
+        .split(content);
+        let native = color && graphics && content.width >= 16;
+        let path_area = Rect::new(rows[0].x, rows[0].y, rows[0].width, rows[0].height.min(1));
+        if native && !path_area.is_empty() {
+            art.badge = Some(path_area);
+        }
+        let path = format!("  {}", render::safe(&self.path.to_string_lossy()));
+        let mut path_style = ui::style(theme, "on_primary_container", "primary_container", color)
+            .add_modifier(Modifier::BOLD);
+        if art.badge.is_some() {
+            path_style = path_style.bg(theme.color("surface"));
+        }
         let status = if self.loading {
-            "Loading folder…".into()
+            "  Contents  ·  Loading folder…".into()
         } else {
-            let git = if self.git_pending {
-                "Git: loading…".into()
+            let branch = if self.git_pending {
+                "  ·  Git scanning".into()
             } else if !self.git.branch.is_empty() {
-                format!("Git: {}", render::safe(&self.git.branch))
+                format!("  ·  {}", render::safe(&self.git.branch))
             } else if self.git.warning.is_some() {
-                "Git: unavailable".into()
+                "  ·  Git unavailable".into()
             } else {
                 String::new()
             };
             format!(
-                " {} entries · {:?} · {:?} · {git}",
+                "  Contents  ·  {}  ·  {:?}{branch}",
                 self.filtered.len(),
-                self.sort,
-                self.density
+                self.sort
             )
         };
-        let title = ui::chip("Terminal New MY  /  files", theme, color);
-        let title = if graphics && rows[0].width >= 28 && rows[0].height >= 1 {
-            art.badge = Some(ratatui::layout::Rect::new(rows[0].x, rows[0].y, 2, 1));
-            Line::from(vec![Span::raw("  "), title])
-        } else {
-            Line::from(title)
-        };
-        frame.render_widget(
-            Paragraph::new(vec![
-                title,
-                Line::from(format!(" {}", render::safe(&self.path.to_string_lossy()))),
-                Line::from(status),
-            ]),
-            rows[0],
-        );
-        let columns = if area.width >= 90 {
-            Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-                .split(rows[1])
-        } else {
-            Layout::default()
-                .constraints([Constraint::Percentage(100)])
-                .split(rows[1])
-        };
-        let height = self.density.row_height();
-        let visible = usize::from(columns[0].height.saturating_sub(2)) / height;
-        let visible = visible.max(1);
-        if self.selected < self.offset {
-            self.offset = self.selected;
-        }
-        if self.selected >= self.offset + visible {
-            self.offset = self.selected + 1 - visible;
-        }
-        let items: Vec<ListItem> = self
-            .filtered
-            .iter()
-            .skip(self.offset)
-            .take(visible)
-            .map(|i| {
-                let entry = &self.entries[*i];
-                let git = self.git.label(&entry.path);
-                let mut lines = vec![Line::from(vec![
-                    Span::styled(
-                        format!(" {git:2} "),
-                        ui::style(theme, "tertiary", "surface_container", color),
-                    ),
-                    Span::styled(
-                        format!("{:5} ", entry.kind),
-                        ui::style(theme, "on_surface_variant", "surface_container", color),
-                    ),
-                    Span::styled(
-                        self.labels[*i].clone(),
-                        ui::style(theme, render::role(entry), "surface_container", color),
-                    ),
-                ])];
-                if height == 2 {
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "           {} · {:04o}",
-                            if entry.directory {
-                                "folder".into()
-                            } else {
-                                files::size(entry.size)
-                            },
-                            entry.permissions
-                        ),
-                        ui::style(theme, "on_surface_variant", "surface_container", color),
-                    )));
-                }
-                ListItem::new(lines)
-            })
-            .collect();
-        let mut state = ListState::default();
-        if !self.filtered.is_empty() {
-            state.select(Some(self.selected.saturating_sub(self.offset)));
-        }
-        frame.render_stateful_widget(
-            List::new(items)
-                .block(ui::surface(" Contents ", theme, color))
-                .highlight_style(ui::selected(theme, color))
-                .highlight_symbol("› "),
-            columns[0],
-            &mut state,
-        );
-        if columns.len() > 1 {
-            self.preview_max = Paragraph::new(self.preview.as_str())
-                .wrap(Wrap { trim: false })
-                .line_count(columns[1].width.saturating_sub(2))
-                .saturating_sub(1)
-                .min(u16::MAX as usize) as u16;
-            self.preview_scroll = self.preview_scroll.min(self.preview_max);
-            let title = format!(
-                " Preview{} · line {} ",
-                if self.preview_focus { " [focus]" } else { "" },
-                self.preview_scroll + 1
+        frame.render_widget(Paragraph::new(Line::styled(path, path_style)), rows[0]);
+
+        let available = rows[1];
+        if area.width >= 90 {
+            let gutter = if margin == 0 { 1 } else { 2 };
+            let list_width = (u32::from(available.width) * 46 / 100) as u16;
+            let list = Rect::new(available.x, available.y, list_width, available.height);
+            let preview = Rect::new(
+                list.right() + gutter,
+                available.y,
+                available.width - list_width - gutter,
+                available.height,
             );
-            let block = ui::surface(title, theme, color);
-            let body = block.inner(columns[1]);
-            if let Some(png) = &self.preview_png
-                && body.width >= 8
-                && body.height >= 7
-            {
-                self.preview_max = 0;
-                self.preview_scroll = 0;
-                let (width, height) = png.size;
-                let label = format!(" PNG · {width} × {height}");
-                let title = if self.preview_focus {
-                    " Preview [focus] "
-                } else {
-                    " Preview "
-                };
-                frame.render_widget(
-                    Paragraph::new(label).block(ui::surface(title, theme, color)),
-                    columns[1],
-                );
-                art.preview = Some(ratatui::layout::Rect::new(
-                    body.x + 1,
-                    body.y + 2,
-                    body.width - 2,
-                    body.height - 3,
-                ));
-            } else {
-                frame.render_widget(
-                    Paragraph::new(self.preview.as_str())
-                        .wrap(Wrap { trim: false })
-                        .scroll((self.preview_scroll, 0))
-                        .block(block),
-                    columns[1],
-                );
-            }
+            art.selected = self.draw_list(frame, list, theme, color, native, &status);
+            art.preview = self.draw_preview(frame, preview, theme, color);
+        } else {
+            art.selected = self.draw_list(frame, available, theme, color, native, &status);
         }
+
         let help = if self.searching {
             format!(
-                " Find: {} · Enter done · Esc clear",
+                "  Find  {}  ·  Enter done  ·  Esc clear",
                 render::safe(&self.query)
             )
         } else if !self.message.is_empty() {
             self.message.clone()
         } else if self.preview_focus {
-            " ↑↓ scroll preview · PgUp/Dn page · Tab files · q exit".into()
+            "  ↑↓ scroll  ·  PgUp/Dn page  ·  Tab files  ·  q exit".into()
         } else if self.pick != Pick::None {
-            " Enter open/select · c choose current folder · p choose entry · q cancel".into()
+            "  c choose folder  ·  p choose entry  ·  Enter open  ·  q cancel".into()
         } else {
-            ui::actions().into()
+            "  ↑↓ move  ·  Enter open  ·  / find  ·  Tab preview  ·  ? keys  ·  q exit".into()
         };
         frame.render_widget(
             Paragraph::new(help)
                 .wrap(Wrap { trim: false })
-                .block(ui::surface(
-                    format!(" {} matches ", self.filtered.len()),
+                .style(ui::style(
                     theme,
+                    "on_surface_variant",
+                    "surface_container",
                     color,
                 )),
             rows[2],
         );
         art
+    }
+
+    fn draw_list(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        color: bool,
+        graphics: bool,
+        status: &str,
+    ) -> Option<Rect> {
+        let title = Rect::new(area.x, area.y, area.width, area.height.min(1));
+        frame.render_widget(
+            Paragraph::new(status).style(
+                ui::style(theme, "primary", "surface_container_high", color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            title,
+        );
+        let visible = usize::from(area.height.saturating_sub(1));
+        if visible == 0 {
+            return None;
+        }
+        if self.selected < self.offset {
+            self.offset = self.selected;
+        } else if self.selected >= self.offset + visible {
+            self.offset = self.selected + 1 - visible;
+        }
+        let mut selection = None;
+        for (row, &index) in self
+            .filtered
+            .iter()
+            .skip(self.offset)
+            .take(visible)
+            .enumerate()
+        {
+            let entry = &self.entries[index];
+            let selected = self.offset + row == self.selected;
+            let native = selected && graphics;
+            let rect = Rect::new(area.x, area.y + row as u16 + 1, area.width, 1);
+            if native {
+                selection = Some(rect);
+            }
+            let surface = if selected {
+                "secondary_container"
+            } else if entry.directory {
+                "surface_container_high"
+            } else {
+                "surface_container"
+            };
+            let ink = if selected {
+                "on_secondary_container"
+            } else {
+                render::role(entry)
+            };
+            let lead = if selected && !native { "› " } else { "  " };
+            let git = self.git.label(&entry.path);
+            let suffix = if git.trim().is_empty() {
+                String::new()
+            } else {
+                format!("  {git}")
+            };
+            let details = if matches!(self.density, Density::Comfortable)
+                && area.width >= 36
+                && !entry.directory
+            {
+                format!("  {:>9}", files::size(entry.size))
+            } else {
+                String::new()
+            };
+            let prefix = format!("{lead}{} ", Icon::for_entry(entry).glyph());
+            let max = usize::from(area.width)
+                .saturating_sub(prefix.width() + suffix.width() + details.width() + 1);
+            let name = render::truncate(&self.labels[index], max);
+            let pad = if details.is_empty() {
+                0
+            } else {
+                max.saturating_sub(name.width())
+            };
+            let label = format!("{prefix}{name}{suffix}{:pad$}{details}", "");
+            let mut style = ui::style(theme, ink, surface, color);
+            if selected {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if native {
+                // Kitty supplies the silhouette. Leave the cells beneath its
+                // transparent corners in the surrounding surface color.
+                style = style.bg(theme.color("surface"));
+            }
+            frame.render_widget(Paragraph::new(label).style(style), rect);
+        }
+        selection
+    }
+
+    fn draw_preview(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        color: bool,
+    ) -> Option<Rect> {
+        let surface = "surface_container";
+        frame.render_widget(
+            Block::default().style(ui::style(theme, "on_surface", surface, color)),
+            area,
+        );
+        let title = Rect::new(area.x, area.y, area.width, area.height.min(1));
+        let body = Rect::new(
+            area.x + 1,
+            title.bottom(),
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(1),
+        );
+        let focus = if self.preview_focus {
+            "  ·  Focus"
+        } else {
+            ""
+        };
+        let image = self
+            .preview_png
+            .as_ref()
+            .filter(|_| body.width >= 8 && body.height >= 5);
+        let style = ui::style(theme, "on_surface_variant", "surface_container_high", color)
+            .add_modifier(Modifier::BOLD);
+        if let Some(image) = image {
+            self.preview_max = 0;
+            self.preview_scroll = 0;
+            let (width, height) = image.size;
+            frame.render_widget(
+                Paragraph::new(format!("  Preview  ·  PNG {width} × {height}{focus}")).style(style),
+                title,
+            );
+            return Some(Rect::new(body.x, body.y + 1, body.width, body.height - 2));
+        }
+        let paragraph = Paragraph::new(self.preview.as_str()).wrap(Wrap { trim: false });
+        self.preview_max = paragraph
+            .line_count(body.width)
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
+        self.preview_scroll = self.preview_scroll.min(self.preview_max);
+        let line = if self.preview_scroll > 0 {
+            format!("  ·  line {}", self.preview_scroll + 1)
+        } else {
+            String::new()
+        };
+        frame.render_widget(
+            Paragraph::new(format!("  Preview{line}{focus}")).style(style),
+            title,
+        );
+        frame.render_widget(paragraph.scroll((self.preview_scroll, 0)), body);
+        None
     }
 }
 

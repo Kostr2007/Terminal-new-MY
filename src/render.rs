@@ -1,13 +1,8 @@
 use crate::{
-    file_art::{self, Icon, Viewport},
     files::{self, Entry},
-    kitty,
     palette::Theme,
 };
-use std::{
-    io::{self, Write},
-    path::Path,
-};
+use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
 
 /// Escape terminal controls, bidi formatting and invisible separators in untrusted text.
@@ -47,246 +42,30 @@ pub fn role(entry: &Entry) -> &'static str {
     }
 }
 
-pub struct ListOptions {
-    pub long: bool,
-    pub zero: bool,
-    pub styled: bool,
-    pub density: crate::ui::Density,
-}
-
-pub struct ListGraphics {
-    art: file_art::Art,
-    columns: usize,
-    row: usize,
-    long: bool,
-}
-
-// Huge lists can tie up Kitty's scrollback processing if every row has images.
-const NATIVE_LIST_ROWS: usize = 256;
-
-impl ListGraphics {
-    pub fn stdout(long: bool, animated: bool) -> Option<Self> {
-        let size = Viewport::stdout()?;
-        if size.columns < if long { 32 } else { 14 } {
-            return None;
-        }
-        Some(Self {
-            art: file_art::Art::new(size.cell, kitty::Playback::entrance(animated)),
-            columns: size.columns,
-            row: 0,
-            long,
-        })
-    }
-
-    pub fn play(&self, out: &mut impl Write) -> io::Result<()> {
-        self.art.play(out)
-    }
-
-    fn entry(
-        &mut self,
-        out: &mut impl Write,
-        entry: &Entry,
-        theme: &Theme,
-        git: bool,
-        name: &str,
-        native: bool,
-    ) -> io::Result<()> {
-        let icon = Icon::for_entry(entry);
-        if native {
-            self.row += 1;
-            out.write_all(b"  ")?;
-            self.art.icon(out, theme, self.row, icon)?;
-            out.write_all(b"   ")?;
-        } else {
-            write!(
-                out,
-                "  {}  ",
-                theme.paint(icon.glyph(), role(entry), None, true)
-            )?;
-        }
-        if git {
-            let status = entry.git_status.as_deref().unwrap_or("  ");
-            let field = format!(" {status:2} ");
-            if status.trim().is_empty() {
-                write!(out, "{field} ")?;
-            } else {
-                write!(
-                    out,
-                    "{} ",
-                    theme.paint(
-                        &field,
-                        "on_secondary_container",
-                        Some("secondary_container"),
-                        true
-                    )
-                )?;
-            }
-        }
-        let mut prefix = if git { 10 } else { 5 };
-        if self.long {
-            let size = if entry.kind == "dir" {
-                "—".into()
-            } else {
-                files::size(entry.size)
-            };
-            let details = format!("{:04o}  {size:>10}  ", entry.permissions);
-            prefix += details.width();
-            write!(
-                out,
-                "{}",
-                theme.paint(&details, "on_surface_variant", None, true)
-            )?;
-        }
-        if native {
-            self.art.label(
-                out,
-                theme,
-                self.row,
-                name.width().min(self.columns.saturating_sub(prefix)),
-            )?;
-        }
-        let target = entry
-            .link_target
-            .as_ref()
-            .map(|path| format!(" → {}", safe(&path.to_string_lossy())))
-            .unwrap_or_default();
-        writeln!(
-            out,
-            "{}{target}",
-            theme.paint(name, role(entry), None, true)
-        )
-    }
-}
-
-pub fn listing(
+pub fn plain_listing(
     out: &mut impl Write,
-    path: &Path,
     entries: &[Entry],
-    options: ListOptions,
-    theme: &Theme,
-    mut graphics: Option<&mut ListGraphics>,
+    long: bool,
+    zero: bool,
 ) -> io::Result<()> {
-    let ListOptions {
-        long,
-        zero,
-        styled,
-        density,
-    } = options;
-    if zero {
-        for entry in entries {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStrExt;
-                out.write_all(entry.path.as_os_str().as_bytes())?;
-            }
-            #[cfg(not(unix))]
-            out.write_all(entry.path.to_string_lossy().as_bytes())?;
+    for entry in entries {
+        if zero {
+            out.write_all(entry.path.as_os_str().as_encoded_bytes())?;
             out.write_all(&[0])?;
-        }
-        return Ok(());
-    }
-    let width = graphics.as_ref().map_or_else(
-        || {
-            crossterm::terminal::size()
-                .map(|s| usize::from(s.0))
-                .unwrap_or(80)
-        },
-        |art| art.columns,
-    );
-    if styled {
-        writeln!(
-            out,
-            "\n{}",
-            theme.paint(
-                &format!(
-                    "  {}  ",
-                    truncate(&safe(&path.to_string_lossy()), width.saturating_sub(4))
-                ),
-                "on_primary_container",
-                Some("primary_container"),
-                true
-            )
-        )?;
-        writeln!(
-            out,
-            "{}",
-            theme.paint(
-                &format!("  {} items", entries.len()),
-                "on_surface_variant",
-                None,
-                true
-            )
-        )?;
-        writeln!(out)?;
-    }
-    let show_git = graphics.is_some()
-        && entries.iter().any(|entry| {
-            entry
-                .git_status
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty())
-        });
-    let first_native = entries.len().saturating_sub(NATIVE_LIST_ROWS);
-    for (index, entry) in entries.iter().enumerate() {
-        let name = safe(&entry.name);
-        if let Some(graphics) = &mut graphics {
-            graphics.entry(out, entry, theme, show_git, &name, index >= first_native)?;
-        } else if styled {
-            let badge = format!(
-                " {:5} {} ",
-                entry.kind,
-                entry.git_status.as_deref().unwrap_or("  ")
-            );
-            let meta = if long {
-                format!(
-                    " {:04o} {:>10}  ",
-                    entry.permissions,
-                    if entry.kind == "dir" {
-                        "—".into()
-                    } else {
-                        files::size(entry.size)
-                    }
-                )
-            } else {
-                String::new()
-            };
-            let suffix = entry
-                .link_target
-                .as_ref()
-                .map(|p| format!(" → {}", safe(&p.to_string_lossy())))
-                .unwrap_or_default();
-            let available = width.saturating_sub(2 + badge.width() + meta.width() + 2);
-            let label = truncate(&format!("{name}{suffix}"), available);
-            writeln!(
-                out,
-                "  {} {}{}",
-                theme.paint(
-                    &badge,
-                    "on_secondary_container",
-                    Some("secondary_container"),
-                    true
-                ),
-                theme.paint(&meta, "on_surface_variant", None, true),
-                theme.paint(&label, role(entry), None, true)
-            )?;
-        } else if long {
-            writeln!(
-                out,
-                "{:7} {:04o} {:>10}  {}",
-                entry.kind,
-                entry.permissions,
-                files::size(entry.size),
-                name
-            )?;
         } else {
-            writeln!(out, "{name}")?;
+            let name = safe(&entry.name);
+            if long {
+                writeln!(
+                    out,
+                    "{:7} {:04o} {:>10}  {name}",
+                    entry.kind,
+                    entry.permissions,
+                    files::size(entry.size)
+                )?;
+            } else {
+                writeln!(out, "{name}")?;
+            }
         }
-        if styled && matches!(density, crate::ui::Density::Comfortable) {
-            writeln!(out)?;
-        }
-    }
-    if styled {
-        writeln!(out)?;
     }
     Ok(())
 }

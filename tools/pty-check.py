@@ -53,7 +53,7 @@ def browser(root, width, keys, extra=(), expected_path=None, expected_code=0, en
         assert b"\x1b[?1049h" in output, output
         assert b"38;2;" in output, ("explicit --color always did not override NO_COLOR", output)
         if width >= 35:
-            assert b"Terminal New MY" in output, output
+            assert b"Contents" in output, output
         assert drain(master, 0.2) == b"", "idle browser keeps redrawing"
         if resize:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, 110, 0, 0))
@@ -228,16 +228,20 @@ with tempfile.TemporaryDirectory() as temporary:
     code, listing = kitty_output(["--density", "compact", "ls", "-l", str(root), str(large)], env)
     assert code == 0 and listing.count(b"file-") == 1001
     assert b"link" in listing and " → folder".encode() in listing and b"file-01000.txt" in listing
-    assert listing.count(b"\x1b_Ga=t,I=") == 4, "reuse one badge per type and one name reveal"
+    assert listing.count(b"\x1b_Ga=t,I=") == 5, "reuse section edges and row surfaces"
     assert b"file-01000.txt" in listing[:listing.index(b"s=2,c=1")]
-    assert listing.count(b"\x1b_Ga=p,I=") == 2 * (256 + 3)
+    assert listing.count(b"\x1b_Ga=p,I=") == 256 + 4
     assert "▪".encode() in listing
     last_list_row = next(row for row in listing.split(b"\r\n") if b"file-01000.txt" in row)
-    assert b",z=1," in last_list_row
+    assert b",z=-1," in last_list_row
+    code, grid = kitty_output(["ls", str(large)], env)
+    assert code == 0 and grid.count(b"file-") == 1001
+    assert any(row.count(b"file-") >= 2 for row in grid.splitlines()), "short lists use multiple columns"
+    assert len(grid.splitlines()) < 350, "one terminal row serves several entries"
     code, static_list = kitty_output(["ls", "--no-motion", str(root)], env)
     assert code == 0 and b"\x1b_Ga=p,I=" in static_list and b"\x1b_Ga=f," not in static_list
     code, plain_list = kitty_output(["--graphics", "never", "ls", str(root)], env)
-    assert code == 0 and b"\x1b_G" not in plain_list and b"dir" in plain_list
+    assert code == 0 and b"\x1b_G" not in plain_list and b"Folders" in plain_list
     code, json_list = kitty_output(["ls", "--json", str(root)], env)
     assert code == 0 and json_list.lstrip().startswith(b"[") and b"\x1b_G" not in json_list
     code, raw_list = kitty_output(["ls", "--zero", str(root)], env)
@@ -253,6 +257,7 @@ with tempfile.TemporaryDirectory() as temporary:
     browser_env = dict(env, TNMY_GRAPHICS="kitty", NO_COLOR="1")
     preview = browser(preview_root, 110, [b"j", b"k", b"q"], extra=("--no-git",), environment=browser_env)
     assert preview.count(b"f=100,") == 2 and b"Back" in preview and b"s=2,c=1" in preview
+    assert preview.count(b",z=-1,") >= 4, "selection surface follows focus"
     leave = preview.index(b"\x1b[?1049l")
     assert b"\x1b_Ga=d,d=N,I=" in preview[:leave]
     chosen = browser(preview_root, 35, [b"p"], extra=("--no-git", "--pick", "--no-motion"),

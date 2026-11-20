@@ -70,31 +70,13 @@ pub fn terminal_area() -> std::io::Result<ratatui::layout::Rect> {
     }
 }
 use clap::ValueEnum;
-use ratatui::{
-    style::{Modifier, Style},
-    text::Span,
-    widgets::{Block, BorderType, Borders},
-};
+use ratatui::style::Style;
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum Density {
     Compact,
     #[default]
     Comfortable,
-}
-impl Density {
-    pub fn margin(self) -> u16 {
-        match self {
-            Self::Compact => 0,
-            Self::Comfortable => 1,
-        }
-    }
-    pub fn row_height(self) -> usize {
-        match self {
-            Self::Compact => 1,
-            Self::Comfortable => 2,
-        }
-    }
 }
 pub fn style(theme: &Theme, fg: &str, bg: &str, color: bool) -> Style {
     if color {
@@ -104,37 +86,4 @@ pub fn style(theme: &Theme, fg: &str, bg: &str, color: bool) -> Style {
     } else {
         Style::default()
     }
-}
-pub fn surface(title: impl Into<String>, theme: &Theme, color: bool) -> Block<'static> {
-    Block::default()
-        .title(title.into())
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .style(style(theme, "on_surface", "surface_container", color))
-        .border_style(if color {
-            Style::default()
-                .fg(theme.color("outline"))
-                .bg(theme.color("surface_container"))
-        } else {
-            Style::default()
-        })
-}
-pub fn chip(text: impl Into<String>, theme: &Theme, color: bool) -> Span<'static> {
-    Span::styled(
-        format!(" {} ", text.into()),
-        style(theme, "on_primary_container", "primary_container", color)
-            .add_modifier(Modifier::BOLD),
-    )
-}
-pub fn selected(theme: &Theme, color: bool) -> Style {
-    style(
-        theme,
-        "on_secondary_container",
-        "secondary_container",
-        color,
-    )
-    .add_modifier(Modifier::BOLD)
-}
-pub fn actions() -> &'static str {
-    " ↑↓ move · Enter open · / find · d density · ? keys · q exit"
 }
