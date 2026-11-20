@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise real terminal behavior; no third-party Python modules required."""
+import base64
 import errno
 import fcntl
 import os
@@ -72,6 +73,7 @@ def browser(root, width, keys, extra=(), expected_path=None, expected_code=0, en
         assert b"\x1b[?1049l" in output, "alternate screen not restored"
         assert termios.tcgetattr(slave) == before, "terminal flags not restored"
         assert b"panicked" not in output
+        return output
     finally:
         if child.poll() is None:
             child.kill()
@@ -223,6 +225,37 @@ with tempfile.TemporaryDirectory() as temporary:
     assert code == 0 and b"example.txt" in text_tree and b"\x1b_G" not in text_tree
     assert "└─ ".encode() in text_tree and "├─ ".encode() in text_tree
 
+    code, listing = kitty_output(["--density", "compact", "ls", "-l", str(root), str(large)], env)
+    assert code == 0 and listing.count(b"file-") == 1001
+    assert b"link" in listing and " → folder".encode() in listing and b"file-01000.txt" in listing
+    assert listing.count(b"\x1b_Ga=t,I=") == 4, "reuse one badge per type and one name reveal"
+    assert b"file-01000.txt" in listing[:listing.index(b"s=2,c=1")]
+    assert listing.count(b"\x1b_Ga=p,I=") == 2 * (1001 + 3)
+    code, static_list = kitty_output(["ls", "--no-motion", str(root)], env)
+    assert code == 0 and b"\x1b_Ga=p,I=" in static_list and b"\x1b_Ga=f," not in static_list
+    code, plain_list = kitty_output(["--graphics", "never", "ls", str(root)], env)
+    assert code == 0 and b"\x1b_G" not in plain_list and b"dir" in plain_list
+    code, json_list = kitty_output(["ls", "--json", str(root)], env)
+    assert code == 0 and json_list.lstrip().startswith(b"[") and b"\x1b_G" not in json_list
+    code, raw_list = kitty_output(["ls", "--zero", str(root)], env)
+    assert code == 0 and os.fsencode(root / "folder") + b"\0" in raw_list and b"\x1b_G" not in raw_list
+
+    preview_root = root / "previews"
+    preview_root.mkdir()
+    png = preview_root / "a.png"
+    png.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j2uoAAAAASUVORK5CYII="
+    ))
+    (preview_root / "b.txt").write_text("Back to text preview")
+    browser_env = dict(env, TNMY_GRAPHICS="kitty", NO_COLOR="1")
+    preview = browser(preview_root, 110, [b"j", b"k", b"q"], extra=("--no-git",), environment=browser_env)
+    assert preview.count(b"f=100,") == 2 and b"Back" in preview and b"s=2,c=1" in preview
+    leave = preview.index(b"\x1b[?1049l")
+    assert b"\x1b_Ga=d,d=N,I=" in preview[:leave]
+    chosen = browser(preview_root, 35, [b"p"], extra=("--no-git", "--pick", "--no-motion"),
+                     expected_path=png, environment=browser_env, resize=True)
+    assert b"f=100," in chosen and b"\x1b_Ga=f," not in chosen
+
     shell = os.environ.get("TNMY_TEST_SH", "/bin/sh")
     wrapped = ["progress", "--", shell, "-c", "printf 'original output'; exit 7"]
     code, activity = kitty_output(wrapped, env)
@@ -262,4 +295,4 @@ exit 7
     code, still = kitty_output(["update", "--action", "build"], dict(env, TNMY_REDUCED_MOTION="1"))
     assert code == 7 and b"\x1b_Ga=p,I=" in still and b"\x1b_Ga=f," not in still
     assert b"\x1b]9;4;" not in still
-    print("Kitty checks passed: animated and static trees, motion for 1,000 entries, command activity, measured progress, text fallback, build log and status")
+    print("Kitty checks passed: animated and static trees, 1,000-entry list, PNG previews and picker, command activity, measured progress, text fallback, build log and status")

@@ -1,5 +1,7 @@
 use crate::{
+    file_art::{self, Icon, Viewport},
     files::{self, Entry},
+    kitty,
     palette::Theme,
 };
 use std::{
@@ -52,12 +54,102 @@ pub struct ListOptions {
     pub density: crate::ui::Density,
 }
 
+pub struct ListGraphics {
+    art: file_art::Art,
+    columns: usize,
+    row: usize,
+}
+
+impl ListGraphics {
+    pub fn stdout(long: bool, animated: bool) -> Option<Self> {
+        let size = Viewport::stdout()?;
+        if size.columns < if long { 32 } else { 14 } {
+            return None;
+        }
+        Some(Self {
+            art: file_art::Art::new(size.cell, kitty::Playback::entrance(animated)),
+            columns: size.columns,
+            row: 0,
+        })
+    }
+
+    pub fn play(&self, out: &mut impl Write) -> io::Result<()> {
+        self.art.play(out)
+    }
+
+    fn entry(
+        &mut self,
+        out: &mut impl Write,
+        entry: &Entry,
+        theme: &Theme,
+        long: bool,
+        git: bool,
+        name: &str,
+    ) -> io::Result<()> {
+        self.row += 1;
+        out.write_all(b"  ")?;
+        self.art
+            .icon(out, theme, self.row, Icon::for_entry(entry))?;
+        out.write_all(b"   ")?;
+        if git {
+            let status = entry.git_status.as_deref().unwrap_or("  ");
+            let field = format!(" {status:2} ");
+            if status.trim().is_empty() {
+                write!(out, "{field} ")?;
+            } else {
+                write!(
+                    out,
+                    "{} ",
+                    theme.paint(
+                        &field,
+                        "on_secondary_container",
+                        Some("secondary_container"),
+                        true
+                    )
+                )?;
+            }
+        }
+        let mut prefix = if git { 10 } else { 5 };
+        if long {
+            let size = if entry.kind == "dir" {
+                "—".into()
+            } else {
+                files::size(entry.size)
+            };
+            let details = format!("{:04o}  {size:>10}  ", entry.permissions);
+            prefix += details.width();
+            write!(
+                out,
+                "{}",
+                theme.paint(&details, "on_surface_variant", None, true)
+            )?;
+        }
+        self.art.label(
+            out,
+            theme,
+            self.row,
+            name.width().min(self.columns.saturating_sub(prefix)),
+        )?;
+        let target = entry
+            .link_target
+            .as_ref()
+            .map(|path| format!(" → {}", safe(&path.to_string_lossy())))
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "{}{target}",
+            theme.paint(name, role(entry), None, true)
+        )
+    }
+}
+
 pub fn listing(
     out: &mut impl Write,
     path: &Path,
     entries: &[Entry],
     options: ListOptions,
     theme: &Theme,
+    mut graphics: Option<&mut ListGraphics>,
 ) -> io::Result<()> {
     let ListOptions {
         long,
@@ -78,9 +170,14 @@ pub fn listing(
         }
         return Ok(());
     }
-    let width = crossterm::terminal::size()
-        .map(|s| usize::from(s.0))
-        .unwrap_or(80);
+    let width = graphics.as_ref().map_or_else(
+        || {
+            crossterm::terminal::size()
+                .map(|s| usize::from(s.0))
+                .unwrap_or(80)
+        },
+        |art| art.columns,
+    );
     if styled {
         writeln!(
             out,
@@ -107,9 +204,18 @@ pub fn listing(
         )?;
         writeln!(out)?;
     }
+    let show_git = graphics.is_some()
+        && entries.iter().any(|entry| {
+            entry
+                .git_status
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+        });
     for entry in entries {
         let name = safe(&entry.name);
-        if styled {
+        if let Some(graphics) = &mut graphics {
+            graphics.entry(out, entry, theme, long, show_git, &name)?;
+        } else if styled {
             let badge = format!(
                 " {:5} {} ",
                 entry.kind,

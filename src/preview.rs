@@ -8,7 +8,53 @@ use std::{
     io::{self, Read},
 };
 
-pub fn load(entry: Entry, cancel: &Cancel) -> String {
+const TEXT_LIMIT: usize = 64 * 1024;
+const PNG_LIMIT: usize = 2 * 1024 * 1024;
+
+pub struct Png {
+    pub size: (usize, usize),
+    pub data: Vec<u8>,
+}
+
+pub struct Content {
+    pub text: String,
+    pub png: Option<Png>,
+}
+
+enum Data {
+    Bytes(Vec<u8>),
+    Png(Png),
+}
+
+fn png_size(bytes: &[u8]) -> Option<(usize, usize)> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR") {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    ((1..=2048).contains(&width) && (1..=2048).contains(&height))
+        .then_some((width as usize, height as usize))
+}
+
+fn read_to(
+    file: &mut impl Read,
+    bytes: &mut Vec<u8>,
+    limit: usize,
+    cancel: &Cancel,
+) -> io::Result<()> {
+    let mut chunk = [0; 4096];
+    while bytes.len() < limit && !cancel.cancelled() {
+        let size = chunk.len().min(limit - bytes.len());
+        let n = file.read(&mut chunk[..size])?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..n]);
+    }
+    Ok(())
+}
+
+pub fn load(entry: Entry, cancel: &Cancel, graphics: bool) -> Content {
     let mut text = format!(
         "{}\n\n{} · {}\nPermissions: {:04o}\n",
         render::safe(&entry.name),
@@ -23,9 +69,9 @@ pub fn load(entry: Entry, cancel: &Cancel) -> String {
         ));
     }
     if entry.kind != "file" || cancel.cancelled() {
-        return text;
+        return Content { text, png: None };
     }
-    let result = (|| -> io::Result<Vec<u8>> {
+    let result = (|| -> io::Result<Data> {
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -34,25 +80,37 @@ pub fn load(entry: Entry, cancel: &Cancel) -> String {
             options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let mut file = options.open(&entry.path)?;
-        if !file.metadata()?.is_file() {
-            return Ok(Vec::new());
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Ok(Data::Bytes(Vec::new()));
         }
         let mut bytes = Vec::new();
-        let mut chunk = [0; 4096];
-        while bytes.len() < 64 * 1024 && !cancel.cancelled() {
-            let n = file.read(&mut chunk)?;
-            if n == 0 {
-                break;
+        read_to(&mut file, &mut bytes, TEXT_LIMIT, cancel)?;
+        if graphics
+            && meta.len() <= PNG_LIMIT as u64
+            && let Some(size) = png_size(&bytes)
+        {
+            read_to(&mut file, &mut bytes, PNG_LIMIT + 1, cancel)?;
+            if bytes.len() <= PNG_LIMIT && bytes.ends_with(b"\0\0\0\0IEND\xaeB\x60\x82") {
+                return Ok(Data::Png(Png { size, data: bytes }));
             }
-            bytes.extend_from_slice(&chunk[..n]);
+            bytes.truncate(TEXT_LIMIT);
         }
-        Ok(bytes)
+        Ok(Data::Bytes(bytes))
     })();
     match result {
-        Ok(bytes) if bytes.contains(&0) => {
+        Ok(Data::Png(png)) => {
+            let (width, height) = png.size;
+            text.push_str(&format!("\nPNG · {width} × {height}\n"));
+            return Content {
+                text,
+                png: Some(png),
+            };
+        }
+        Ok(Data::Bytes(bytes)) if bytes.contains(&0) => {
             text.push_str("\nBinary file · text preview unavailable")
         }
-        Ok(bytes) => {
+        Ok(Data::Bytes(bytes)) => {
             text.push('\n');
             for line in String::from_utf8_lossy(&bytes).lines().take(2000) {
                 if cancel.cancelled() {
@@ -61,11 +119,13 @@ pub fn load(entry: Entry, cancel: &Cancel) -> String {
                 text.push_str(&render::safe(line));
                 text.push('\n');
             }
-            if entry.size > 64 * 1024 || bytes.iter().filter(|b| **b == b'\n').count() > 2000 {
+            if entry.size > TEXT_LIMIT as u64
+                || bytes.iter().filter(|b| **b == b'\n').count() > 2000
+            {
                 text.push_str("\n[preview limited to 64 KiB / 2000 lines]");
             }
         }
         Err(e) => text.push_str(&format!("\nPreview: {}", render::safe(&e.to_string()))),
     }
-    text
+    Content { text, png: None }
 }

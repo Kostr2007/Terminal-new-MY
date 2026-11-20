@@ -1,4 +1,6 @@
 mod browser;
+mod browser_art;
+mod file_art;
 mod files;
 mod git;
 mod kitty;
@@ -17,7 +19,7 @@ mod worker;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::{
-    io::{self, IsTerminal, Write},
+    io::{self, BufWriter, IsTerminal, Write},
     path::PathBuf,
     process::ExitCode,
 };
@@ -85,6 +87,9 @@ enum Commands {
         /// Include bounded Git status metadata
         #[arg(long)]
         git: bool,
+        /// Use static file badges in Kitty
+        #[arg(long)]
+        no_motion: bool,
     },
     /// Print a directory tree with inline graphics in Kitty
     Tree(tree::Options),
@@ -103,6 +108,9 @@ enum Commands {
         /// Choose a directory for shell integration
         #[arg(long)]
         pick_directory: bool,
+        /// Use a static folder badge in Kitty
+        #[arg(long)]
+        no_motion: bool,
     },
     /// Check palette discovery and terminal capabilities
     Doctor {
@@ -151,10 +159,17 @@ fn run(cli: Cli) -> io::Result<u8> {
             zero,
             sort,
             git,
+            no_motion,
         } => {
             let mut git_cache = git::Cache::default();
             let stdout = io::stdout();
-            let mut out = stdout.lock();
+            let mut out = BufWriter::new(stdout.lock());
+            let mut graphics =
+                if styled && !json && !zero && cli.graphics.enabled(stdout.is_terminal()) {
+                    render::ListGraphics::stdout(long, !no_motion)
+                } else {
+                    None
+                };
             let mut failed = false;
             // Streaming output may already have started when a later path fails.
             let mut entries = Vec::new();
@@ -183,18 +198,22 @@ fn run(cli: Cli) -> io::Result<u8> {
                 });
                 match result {
                     Ok(found) if json => entries.extend(found),
-                    Ok(found) => render::listing(
-                        &mut out,
-                        path,
-                        &found,
-                        render::ListOptions {
-                            long,
-                            zero,
-                            styled,
-                            density: cli.density,
-                        },
-                        &theme,
-                    )?,
+                    Ok(found) => {
+                        render::listing(
+                            &mut out,
+                            path,
+                            &found,
+                            render::ListOptions {
+                                long,
+                                zero,
+                                styled,
+                                density: cli.density,
+                            },
+                            &theme,
+                            graphics.as_mut(),
+                        )?;
+                        out.flush()?;
+                    }
                     Err(e) => {
                         eprintln!("tnmy: {}: {e}", render::safe(&path.to_string_lossy()));
                         failed = true;
@@ -207,6 +226,10 @@ fn run(cli: Cli) -> io::Result<u8> {
                 })?;
                 writeln!(out, "{data}")?;
             }
+            if let Some(graphics) = graphics {
+                graphics.play(&mut out)?;
+            }
+            out.flush()?;
             Ok(u8::from(failed))
         }
         Commands::Files {
@@ -215,6 +238,7 @@ fn run(cli: Cli) -> io::Result<u8> {
             no_git,
             pick,
             pick_directory,
+            no_motion,
         } => {
             if !io::stdin().is_terminal()
                 || !io::stderr().is_terminal()
@@ -239,6 +263,8 @@ fn run(cli: Cli) -> io::Result<u8> {
                     density: cli.density,
                     git: !no_git,
                     pick: mode,
+                    graphics: cli.graphics.enabled(io::stderr().is_terminal()),
+                    animated: !no_motion,
                 },
                 theme,
                 styled,

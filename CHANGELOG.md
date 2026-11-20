@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0-alpha.6
+
+- Render `myls` with reusable Kitty badges, palette-colored Git statuses and a single native name reveal after writing the list.
+- Share directory, file and link artwork across `myls`, `mytree` and the `myfiles` header.
+- Show bounded PNG previews directly in the Kitty file browser and picker, with graphics scoped to the alternate screen.
+
 ## 0.3.0-alpha.5
 
 - Give `myupdate` a palette-colored morphing shape and animated wave in Kitty.

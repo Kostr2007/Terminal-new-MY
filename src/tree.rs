@@ -1,8 +1,8 @@
 use crate::{
-    kitty,
+    file_art::{Icon, Viewport},
     palette::Theme,
     render,
-    tree_art::{Art, Available},
+    tree_art::Art,
 };
 use clap::Args;
 use std::{
@@ -95,13 +95,13 @@ impl<W: Write> Tree<'_, W> {
             let last = index + 1 == len;
             let name = render::safe(&item.entry.file_name().to_string_lossy());
             let (kind, suffix, role) = if item.kind.is_dir() {
-                (0, "/", "primary")
+                (Icon::Folder, "/", "primary")
             } else if item.kind.is_symlink() {
-                (2, "@", "tertiary")
+                (Icon::Link, "@", "tertiary")
             } else if item.kind.is_file() {
-                (1, "", "on_surface")
+                (Icon::File, "", "on_surface")
             } else {
-                (2, "", "on_surface")
+                (Icon::Special, "", "on_surface")
             };
             let target = item
                 .kind
@@ -123,9 +123,10 @@ impl<W: Write> Tree<'_, W> {
             {
                 art.branch(&mut self.out, self.theme, self.count, last)?;
                 self.out.write_all(b"   ")?;
-                art.icon(&mut self.out, self.theme, self.count, kind)?;
+                art.files
+                    .icon(&mut self.out, self.theme, self.count, kind)?;
                 self.out.write_all(b"  ")?;
-                art.label(
+                art.files.label(
                     &mut self.out,
                     self.theme,
                     self.count,
@@ -178,10 +179,10 @@ pub fn run(options: Options, theme: &Theme, styled: bool, graphics: bool) -> io:
         )
     )?;
     out.flush()?;
-    let graphics = graphics.then(Available::stdout).flatten().map(|size| {
-        let animated = kitty::motion_enabled() && !options.no_motion;
-        (Art::new(size.cell, animated), size.columns)
-    });
+    let graphics = graphics
+        .then(Viewport::stdout)
+        .flatten()
+        .map(|size| (Art::new(size.cell, !options.no_motion), size.columns));
     let mut tree = Tree {
         out,
         theme,

@@ -1,4 +1,5 @@
 use crate::{
+    browser_art,
     files::{self, Entry, Sort},
     git,
     palette::Theme,
@@ -43,6 +44,8 @@ pub struct Options {
     pub density: Density,
     pub git: bool,
     pub pick: Pick,
+    pub graphics: bool,
+    pub animated: bool,
 }
 struct Load {
     path: PathBuf,
@@ -67,6 +70,7 @@ struct App {
     preview_pending: bool,
     git_pending: bool,
     preview: String,
+    preview_png: Option<preview::Png>,
     preview_scroll: u16,
     preview_max: u16,
     preview_focus: bool,
@@ -91,8 +95,9 @@ impl App {
         self.selected = 0;
         self.offset = 0;
     }
-    fn update_preview(&mut self, worker: &Worker<Entry, String>) {
+    fn update_preview(&mut self, worker: &Worker<Entry, preview::Content>) {
         self.preview_scroll = 0;
+        self.preview_png = None;
         if let Some(entry) = self.entry() {
             worker.submit(entry.clone());
             self.preview = "Loading preview…".into();
@@ -103,7 +108,14 @@ impl App {
             self.preview_pending = false;
         }
     }
-    fn draw(&mut self, frame: &mut Frame, theme: &Theme, color: bool) {
+    fn draw(
+        &mut self,
+        frame: &mut Frame,
+        theme: &Theme,
+        color: bool,
+        graphics: bool,
+    ) -> browser_art::Layout {
+        let mut art = browser_art::Layout::default();
         let area = frame.area();
         frame.render_widget(
             Block::default().style(ui::style(theme, "on_surface", "surface", color)),
@@ -137,9 +149,16 @@ impl App {
                 self.density
             )
         };
+        let title = ui::chip("Terminal New MY  /  files", theme, color);
+        let title = if graphics && rows[0].width >= 28 && rows[0].height >= 1 {
+            art.badge = Some(ratatui::layout::Rect::new(rows[0].x, rows[0].y, 2, 1));
+            Line::from(vec![Span::raw("  "), title])
+        } else {
+            Line::from(title)
+        };
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(ui::chip("Terminal New MY  /  files", theme, color)),
+                title,
                 Line::from(format!(" {}", render::safe(&self.path.to_string_lossy()))),
                 Line::from(status),
             ]),
@@ -227,13 +246,40 @@ impl App {
                 if self.preview_focus { " [focus]" } else { "" },
                 self.preview_scroll + 1
             );
-            frame.render_widget(
-                Paragraph::new(self.preview.as_str())
-                    .wrap(Wrap { trim: false })
-                    .scroll((self.preview_scroll, 0))
-                    .block(ui::surface(title, theme, color)),
-                columns[1],
-            );
+            let block = ui::surface(title, theme, color);
+            let body = block.inner(columns[1]);
+            if let Some(png) = &self.preview_png
+                && body.width >= 8
+                && body.height >= 7
+            {
+                self.preview_max = 0;
+                self.preview_scroll = 0;
+                let (width, height) = png.size;
+                let label = format!(" PNG · {width} × {height}");
+                let title = if self.preview_focus {
+                    " Preview [focus] "
+                } else {
+                    " Preview "
+                };
+                frame.render_widget(
+                    Paragraph::new(label).block(ui::surface(title, theme, color)),
+                    columns[1],
+                );
+                art.preview = Some(ratatui::layout::Rect::new(
+                    body.x + 1,
+                    body.y + 2,
+                    body.width - 2,
+                    body.height - 3,
+                ));
+            } else {
+                frame.render_widget(
+                    Paragraph::new(self.preview.as_str())
+                        .wrap(Wrap { trim: false })
+                        .scroll((self.preview_scroll, 0))
+                        .block(block),
+                    columns[1],
+                );
+            }
         }
         let help = if self.searching {
             format!(
@@ -259,6 +305,7 @@ impl App {
                 )),
             rows[2],
         );
+        art
     }
 }
 
@@ -273,7 +320,9 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             Ok((path, entries))
         },
     );
-    let preview = Worker::new(preview::load);
+    let preview = Worker::new(move |entry, cancel: &crate::worker::Cancel| {
+        preview::load(entry, cancel, options.graphics)
+    });
     let mut cache = git::Cache::default();
     let git = Worker::new(
         move |(path, force): (PathBuf, bool), cancel: &crate::worker::Cancel| {
@@ -302,6 +351,7 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
         preview_pending: false,
         git_pending: false,
         preview: String::new(),
+        preview_png: None,
         preview_scroll: 0,
         preview_max: 0,
         preview_focus: false,
@@ -330,11 +380,17 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             viewport: ratatui::Viewport::Fixed(area),
         },
     )?;
+    let mut art = options
+        .graphics
+        .then(|| browser_art::Art::new(options.animated));
     let mut dirty = true;
     let mut refresh_git = false;
     loop {
         let current_area = ui::terminal_area()?;
         if current_area != area {
+            if let Some(art) = &mut art {
+                art.clear(true, true)?;
+            }
             area = current_area;
             terminal.resize(area)?;
             dirty = true;
@@ -346,6 +402,11 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             app.loading = false;
             match result {
                 Ok((path, entries)) => {
+                    if path != app.path
+                        && let Some(art) = &mut art
+                    {
+                        art.clear(true, false)?;
+                    }
                     app.path = path;
                     app.entries = entries;
                     app.search = app.entries.iter().map(|e| e.name.to_lowercase()).collect();
@@ -370,7 +431,11 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             dirty = true;
         }
         if let Some(result) = preview.result() {
-            app.preview = result;
+            if let Some(art) = &mut art {
+                art.clear(false, true)?;
+            }
+            app.preview = result.text;
+            app.preview_png = result.png;
             app.preview_pending = false;
             dirty = true;
         }
@@ -380,7 +445,11 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             dirty = true;
         }
         if dirty {
-            terminal.draw(|frame| app.draw(frame, &theme, color))?;
+            let mut layout = browser_art::Layout::default();
+            terminal.draw(|frame| layout = app.draw(frame, &theme, color, art.is_some()))?;
+            if let Some(art) = &mut art {
+                art.draw(layout, app.preview_png.as_ref(), &theme)?;
+            }
             dirty = false;
         }
         let timeout = if app.loading || app.preview_pending || app.git_pending {
@@ -493,6 +562,9 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
                 refresh_git = true;
                 if let Ok(next) = Theme::load(theme.source.as_deref()) {
                     theme = next;
+                    if let Some(art) = &mut art {
+                        art.clear(true, false)?;
+                    }
                 }
             }
             KeyCode::Char('c') if app.pick != Pick::None && !app.loading => {
@@ -531,6 +603,7 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             preview.cancel();
             git.cancel();
             app.preview_pending = false;
+            app.preview_png = None;
             app.git_pending = false;
         } else if reload {
             load.submit(Load {
@@ -542,6 +615,7 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
             preview.cancel();
             git.cancel();
             app.preview_pending = false;
+            app.preview_png = None;
             app.git_pending = false;
         } else if previous != app.selected {
             app.update_preview(&preview);
@@ -601,6 +675,7 @@ mod tests {
             preview_pending: false,
             git_pending: false,
             preview: "Привет.md\n\nMaterial You\nРусский текст".into(),
+            preview_png: None,
             preview_scroll: 0,
             preview_max: 0,
             preview_focus: false,
@@ -618,7 +693,9 @@ mod tests {
             let mut app = sample(density);
             let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 18)).unwrap();
             terminal
-                .draw(|frame| app.draw(frame, &Theme::default(), true))
+                .draw(|frame| {
+                    app.draw(frame, &Theme::default(), true, false);
+                })
                 .unwrap();
             let text = terminal
                 .backend()

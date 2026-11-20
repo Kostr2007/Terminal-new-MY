@@ -1,4 +1,3 @@
-use crate::palette::Theme;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use clap::ValueEnum;
 use flate2::{Compression, write::ZlibEncoder};
@@ -102,48 +101,21 @@ pub fn motion_enabled() -> bool {
     env::var_os("TNMY_REDUCED_MOTION").is_none() && env::var_os("MYT_NO_ANIMATION").is_none()
 }
 
-pub fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
-    let (foreground, background) = match kind {
-        0 => ("on_primary_container", "primary_container"),
-        1 => ("on_secondary_container", "secondary_container"),
-        _ => ("tertiary", "surface_container_high"),
-    };
-    let fg = rgb(theme.accessible(foreground, background));
-    let bg = rgb(theme.color(background));
-    // The cubic ease-out comes from Material-You-Terminal's card studio.
-    let eased = 1. - (1. - progress).powi(3);
-    let scale = 0.50 + 0.50 * eased;
-    let mut pixels = raster(24, 24, |x, y| {
-        let x = 12. + (x - 12.) / scale;
-        let y = 12. + (y - 12.) / scale;
-        let mark = match kind {
-            0 => rounded(x, y, [5., 9., 19., 18.], 2.) || rounded(x, y, [5., 6., 12., 13.], 2.),
-            1 => {
-                rounded(x, y, [8., 5., 16., 19.], 2.)
-                    && !((10. ..14.).contains(&x)
-                        && ((10. ..12.).contains(&y) || (14. ..16.).contains(&y)))
-            }
-            _ => (x - 12.).abs() + (y - 12.).abs() < 6.,
-        };
-        if mark {
-            Some(fg)
-        } else if rounded(x, y, [1., 1., 23., 23.], 8.) {
-            Some(bg)
-        } else {
-            None
-        }
-    });
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        pixel[3] = (f32::from(pixel[3]) * (0.10 + 0.90 * eased)).round() as u8;
-    }
-    pixels
-}
-
 #[derive(Clone, Copy)]
 pub enum Playback {
     Still,
     Once,
     Loop,
+}
+
+impl Playback {
+    pub fn entrance(animated: bool) -> Self {
+        if animated && motion_enabled() {
+            Self::Once
+        } else {
+            Self::Still
+        }
+    }
 }
 
 /// An image that can be placed many times. Animation starts after placement.
@@ -154,6 +126,16 @@ pub struct Sprite {
 }
 
 impl Sprite {
+    pub fn png(out: &mut impl Write, size: (usize, usize), data: &[u8]) -> io::Result<Self> {
+        let id = number()?;
+        transmit(out, &format!("a=t,I={id},f=100"), data)?;
+        Ok(Self {
+            id,
+            size,
+            playback: Playback::Still,
+        })
+    }
+
     pub fn upload(
         out: &mut impl Write,
         size: (usize, usize),
@@ -206,9 +188,20 @@ impl Sprite {
         layer: i8,
         crop_width: Option<usize>,
     ) -> io::Result<()> {
+        self.place_in(out, placement, (columns, 1), layer, crop_width)
+    }
+
+    pub fn place_in(
+        &self,
+        out: &mut impl Write,
+        placement: usize,
+        (columns, rows): (usize, usize),
+        layer: i8,
+        crop_width: Option<usize>,
+    ) -> io::Result<()> {
         write!(
             out,
-            "\x1b_Ga=p,I={},p={placement},c={columns},r=1,z={layer},C=1,q=2",
+            "\x1b_Ga=p,I={},p={placement},c={columns},r={rows},z={layer},C=1,q=2",
             self.id
         )?;
         if let Some(width) = crop_width {
