@@ -1,5 +1,5 @@
 complete -c tnmy -f
-complete -c tnmy -n 'not __fish_seen_subcommand_from ls tree files doctor theme update' -a 'ls tree files doctor theme update'
+complete -c tnmy -n 'not __fish_seen_subcommand_from ls tree files doctor theme update progress' -a 'ls tree files doctor theme update progress'
 complete -c tnmy -l palette -r -d 'Material-You-Terminal palette.json'
 complete -c tnmy -l color -x -a 'auto always never'
 complete -c tnmy -l density -x -a 'compact comfortable'
@@ -29,3 +29,4 @@ complete -c tnmy -n '__fish_seen_subcommand_from tree' -s L -l depth -x -d 'Dire
 complete -c tnmy -n '__fish_seen_subcommand_from update' -l observe -d 'Save structured Nix events'
 complete -c tnmy -n '__fish_seen_subcommand_from update' -l replay -r -d 'Summarize a saved event log'
 complete -c tnmy -n '__fish_seen_subcommand_from tree' -l no-motion -d 'Show tree without animation'
+complete -c tnmy -n '__fish_seen_subcommand_from progress' -l total -x -d 'Total units for progress counts on stdin'

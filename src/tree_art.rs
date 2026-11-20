@@ -10,7 +10,7 @@ pub struct Art {
     branches: [Option<kitty::Sprite>; 2],
     sweep: Option<kitty::Sprite>,
     cell: (usize, usize),
-    animated: bool,
+    playback: kitty::Playback,
 }
 
 #[derive(Clone, Copy)]
@@ -51,7 +51,11 @@ impl Art {
             branches: Default::default(),
             sweep: None,
             cell,
-            animated,
+            playback: if animated {
+                kitty::Playback::Once
+            } else {
+                kitty::Playback::Still
+            },
         }
     }
 
@@ -68,7 +72,7 @@ impl Art {
             *slot = Some(kitty::Sprite::upload(
                 out,
                 size,
-                self.animated,
+                self.playback,
                 |progress| branch_frame(self.cell, theme, last, progress),
             )?);
         }
@@ -89,7 +93,7 @@ impl Art {
             *slot = Some(kitty::Sprite::upload(
                 out,
                 (24, 24),
-                self.animated,
+                self.playback,
                 |progress| kitty::icon_frame(kind, theme, progress),
             )?);
         }
@@ -106,7 +110,7 @@ impl Art {
         columns: usize,
     ) -> io::Result<()> {
         let columns = columns.min(SWEEP_COLUMNS);
-        if !self.animated || columns == 0 {
+        if matches!(self.playback, kitty::Playback::Still) || columns == 0 {
             return Ok(());
         }
         let width = self.cell.0 * SWEEP_COLUMNS;
@@ -115,7 +119,7 @@ impl Art {
             self.sweep = Some(kitty::Sprite::upload(
                 out,
                 (width, height),
-                true,
+                self.playback,
                 |progress| sweep_frame(width, height, theme, progress),
             )?);
         }

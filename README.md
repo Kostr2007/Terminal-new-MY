@@ -5,7 +5,33 @@ Material You для повседневной работы в терминале:
 Работает в [Kitty Material You](https://github.com/Kostr2007/Kitty-Material-You)
 и обычных терминалах с UTF-8.
 
-**v0.3.0-alpha.4** выводит имена `mytree` без пауз между строками. В Kitty
+## Индикаторы загрузки
+
+В **v0.3.0-alpha.5** у `myupdate` появился новый индикатор. Форма в круглом
+контейнере меняет очертания, а волна растягивается и сжимается в такт. Kitty
+проигрывает кадры самостоятельно, пока `nh` пишет логи. Если известен объём
+работы, волна заполняет дорожку по фактическим значениям и показывает процент.
+Оба индикатора используют палитру `myt`. [Загрузка в Material 3](https://developer.android.com/develop/ui/compose/components/loading-indicator) · [Волновые полосы](https://developer.android.com/develop/ui/compose/components/progress#m3-expressive-update)
+
+![Ожидание и измеряемый прогресс в Kitty](docs/screenshots/kitty-progress-dark.gif)
+
+[Та же анимация в светлой теме](docs/screenshots/kitty-progress-light.gif)
+
+```fish
+myprogress -- sleep 3
+for n in (seq 0 10); echo $n; sleep 0.15; end | myprogress --total 10
+myupdate --action build --flake /etc/nixos
+```
+
+`myprogress -- КОМАНДА` запускает команду с её обычными потоками и возвращает её
+код завершения. `myprogress --total N` читает из stdin по одному числу завершённых
+единиц на строку, от 0 до N. Если поток завершится раньше N, возвращается код 1.
+В обычном терминале полоса рисуется символами. При перенаправлении stderr
+измеряемый прогресс печатает только итоговую строку.
+
+## Дерево в Kitty
+
+`mytree` выводит имена без пауз между строками. В Kitty
 скруглённые ветви заканчиваются цветными точками, иконки раскрываются,
 а имена плавно проявляются слева направо. Kitty проигрывает короткий эффект
 и на последних строках большого дерева. Имена остаются выделяемым текстом
@@ -20,15 +46,8 @@ Material You для повседневной работы в терминале:
 ```fish
 mytree -L 3
 mytree --no-motion -L 3
-myupdate --action build --flake /etc/nixos
 tnmy --graphics never tree -L 2
 ```
-
-`myupdate` показывает Material-индикатор во время работы `nh`. Kitty
-проигрывает кадры самостоятельно и показывает активность на краю окна в версиях
-с поддержкой OSC 9;4. На снимке ниже демонстрационный процесс сборки.
-
-![Material-индикатор во время сборки](docs/screenshots/kitty-loader.png)
 
 Графика включается автоматически в прямом сеансе Kitty. `--graphics kitty`
 включает её явно в интерактивном терминале, а `--graphics never` отключает.
@@ -108,6 +127,8 @@ cargo build --release --locked
 | `tnmy theme --check-contrast` | Проверка исходного и фактического контраста |
 | `tnmy update` | Пересборка текущей конфигурации через `nh os switch` |
 | `tnmy update --refresh` | Обновление входов flake и пересборка |
+| `tnmy progress -- COMMAND…` | Индикатор ожидания для команды |
+| `tnmy progress --total N` | Полоса прогресса по числам из stdin |
 | `tnmy doctor [--json]` | Источник палитры и возможности окружения |
 | `tnmy theme` | Цветовые роли текущей темы |
 
@@ -181,7 +202,7 @@ terminal-new-my.inputs.nixpkgs.follows = "nixpkgs";
 ```
 
 Модуль устанавливает `tnmy`, дополнения fish и функции `myls`, `myfiles`,
-`myupdate`, `mycd` и тематические обёртки. Существующие промпт, приветствие, плагины и aliases сохраняются.
+`myupdate`, `myprogress`, `mycd` и тематические обёртки. Существующие промпт, приветствие, плагины и aliases сохраняются.
 `replaceLs = true` явно заменяет fish alias `ls`; поддерживаются флаги `tnmy`.
 Linux x86_64 проверяется локально и в CI; aarch64 output предусмотрен,
 но на ARM пока не проверен.

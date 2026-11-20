@@ -5,6 +5,8 @@ mod kitty;
 mod nix_events;
 mod palette;
 mod preview;
+mod progress;
+mod progress_art;
 mod render;
 mod tool_themes;
 mod tree;
@@ -111,6 +113,8 @@ enum Commands {
     Theme(tool_themes::Options),
     /// Run nh with a clear operation header and a persistent result
     Update(update::Args),
+    /// Show activity for a command or visualize completed units from stdin
+    Progress(progress::Options),
 }
 
 fn run(cli: Cli) -> io::Result<u8> {
@@ -127,7 +131,7 @@ fn run(cli: Cli) -> io::Result<u8> {
         ColorMode::Always => true,
         ColorMode::Never => false,
         ColorMode::Auto => {
-            (if picker {
+            (if picker || matches!(&cli.command, Commands::Update(_) | Commands::Progress(_)) {
                 io::stderr().is_terminal()
             } else {
                 io::stdout().is_terminal()
@@ -254,6 +258,12 @@ fn run(cli: Cli) -> io::Result<u8> {
             }
             Ok(0)
         }
+        Commands::Progress(options) => progress::run(
+            options,
+            &theme,
+            styled,
+            cli.graphics.enabled(io::stderr().is_terminal()),
+        ),
         Commands::Tree(options) => tree::run(
             options,
             &theme,

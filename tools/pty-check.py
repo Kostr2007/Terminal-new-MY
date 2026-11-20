@@ -168,16 +168,20 @@ with tempfile.TemporaryDirectory() as temporary:
     assert plain.count(b"example.txt") == 1 and b"link@" in plain
     assert "└─ ".encode() in plain and "├─ ".encode() in plain
 
-    def kitty_output(args, environment):
+    def kitty_output(args, environment, input_bytes=None, columns=100):
         master, slave = pty.openpty()
         try:
             try:
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, 100, 1200, 600))
-                child = subprocess.Popen([BINARY, *args], stdin=slave, stdout=slave, stderr=slave, env=environment)
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, columns, columns * 12, 600))
+                child = subprocess.Popen([BINARY, *args], stdin=slave if input_bytes is None else subprocess.PIPE,
+                                         stdout=slave, stderr=slave, env=environment)
             finally:
                 os.close(slave)
             with child:
                 try:
+                    if child.stdin is not None:
+                        child.stdin.write(input_bytes)
+                        child.stdin.close()
                     output = drain(master, 5)
                     return child.wait(timeout=5), output
                 finally:
@@ -220,6 +224,26 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "└─ ".encode() in text_tree and "├─ ".encode() in text_tree
 
     shell = os.environ.get("TNMY_TEST_SH", "/bin/sh")
+    wrapped = ["progress", "--", shell, "-c", "printf 'original output'; exit 7"]
+    code, activity = kitty_output(wrapped, env)
+    assert code == 7 and b"s=3,v=1,c=1" in activity and b"original output" in activity
+    assert activity.index(b"original output") < activity.index(b"\x1b_Ga=d,d=N,I=")
+    assert b"\x1b]9;4;3;0" in activity and b"\x1b]9;4;0;0" in activity
+    plain = subprocess.run([BINARY, *wrapped], env=env, capture_output=True, timeout=5)
+    assert plain.returncode == 7 and plain.stdout == b"original output" and plain.stderr == b""
+
+    counts = b"0\n3\n3\n6\n7\n"
+    measured_args = ["progress", "--total", "7"]
+    code, meter = kitty_output(measured_args, env, counts)
+    assert code == 0 and b" 42%" in meter and b" 85%" in meter and b"100%" in meter
+    assert meter.count(b"\x1b_Ga=f,r=1,") == 3 and meter.count(b"\x1b_Ga=p,I=") == 1
+    code, narrow = kitty_output(measured_args, env, b"3\n7\n", columns=11)
+    assert code == 0 and b"\x1b_G" not in narrow and b"100%" in narrow
+    plain = subprocess.run([BINARY, *measured_args], input=b"3\n", env=env, capture_output=True, timeout=5)
+    assert plain.returncode == 1 and plain.stdout == b"" and plain.stderr.decode() == "42% · 3/7\n"
+    invalid = subprocess.run([BINARY, *measured_args], input=b"8\n", env=env, capture_output=True, timeout=5)
+    assert invalid.returncode == 1 and b"counts must be integers from 0 to 7" in invalid.stderr
+
     nix = root / "nix"
     nix.write_text(f'#!{shell}\nprintf \'%s\\n\' \'{{"json-log-path":{{}}}}\'\n')
     nix.chmod(0o755)
@@ -231,11 +255,11 @@ exit 7
     nh.chmod(0o755)
     env["PATH"] = str(root)
     code, active = kitty_output(["update", "--action", "build"], env)
-    assert code == 7 and b"\x1b_Ga=f,I=" in active and b"\x1b_Ga=d,d=N,I=" in active
+    assert code == 7 and b"s=3,v=1,c=1" in active and b"\x1b_Ga=d,d=N,I=" in active
     assert b"0 complete" in active and b"1 failed" in active
     logs = list((root / "state" / "terminal-new-my" / "builds").glob("*.jsonl"))
     assert len(logs) == 1 and logs[0].stat().st_mode & 0o777 == 0o600
     code, still = kitty_output(["update", "--action", "build"], dict(env, TNMY_REDUCED_MOTION="1"))
-    assert code == 7 and b"\x1b_Ga=T,I=" in still and b"\x1b_Ga=f,I=" not in still
+    assert code == 7 and b"\x1b_Ga=p,I=" in still and b"\x1b_Ga=f," not in still
     assert b"\x1b]9;4;" not in still
-    print("Kitty checks passed: animated and static trees, last-row motion for 1,000 entries, text fallback, animated and static loaders, log and status")
+    print("Kitty checks passed: animated and static trees, motion for 1,000 entries, command activity, measured progress, text fallback, build log and status")

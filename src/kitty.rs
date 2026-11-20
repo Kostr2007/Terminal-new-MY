@@ -64,7 +64,7 @@ pub fn rgb(color: Color) -> [u8; 3] {
     }
 }
 
-fn rounded(x: f32, y: f32, rect: [f32; 4], radius: f32) -> bool {
+pub fn rounded(x: f32, y: f32, rect: [f32; 4], radius: f32) -> bool {
     let [left, top, right, bottom] = rect;
     let dx = x - x.clamp(left + radius, right - radius);
     let dy = y - y.clamp(top + radius, bottom - radius);
@@ -139,40 +139,63 @@ pub fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
     pixels
 }
 
-/// An image shared by many output rows. Animation starts once after placement.
+#[derive(Clone, Copy)]
+pub enum Playback {
+    Still,
+    Once,
+    Loop,
+}
+
+/// An image that can be placed many times. Animation starts after placement.
 pub struct Sprite {
     id: u32,
-    animated: bool,
+    size: (usize, usize),
+    playback: Playback,
 }
 
 impl Sprite {
     pub fn upload(
         out: &mut impl Write,
-        (width, height): (usize, usize),
-        animated: bool,
+        size: (usize, usize),
+        playback: Playback,
         frame: impl Fn(f32) -> Vec<u8>,
     ) -> io::Result<Self> {
-        const STEPS: u8 = 7;
-        const GAP_MS: u8 = 36;
         let id = number()?;
-        let send = |out: &mut _, action: &str, pixels: Vec<u8>| -> io::Result<()> {
-            let mut compressed = ZlibEncoder::new(Vec::new(), Compression::fast());
-            compressed.write_all(&pixels)?;
-            transmit(
-                out,
-                &format!("{action},I={id},f=32,s={width},v={height},o=z"),
-                &compressed.finish()?,
-            )
-        };
-        send(out, "a=t", frame(if animated { 0. } else { 1. }))?;
-        if animated {
-            write!(out, "\x1b_Ga=a,I={id},r=1,z={GAP_MS},q=2\x1b\\")?;
-            let action = format!("a=f,X=1,z={GAP_MS}");
-            for step in 1..=STEPS {
-                send(out, &action, frame(f32::from(step) / f32::from(STEPS)))?;
+        let sprite = Self { id, size, playback };
+        let (frames, divisions, gap): (u8, u8, u8) = match playback {
+            Playback::Still => {
+                sprite.send(out, "a=t", &frame(1.))?;
+                return Ok(sprite);
             }
+            Playback::Once => (8, 7, 36),
+            Playback::Loop => (24, 24, 55),
+        };
+        sprite.send(out, "a=t", &frame(0.))?;
+        write!(out, "\x1b_Ga=a,I={id},r=1,z={gap},q=2\x1b\\")?;
+        let action = format!("a=f,X=1,z={gap}");
+        for step in 1..frames {
+            sprite.send(out, &action, &frame(f32::from(step) / f32::from(divisions)))?;
         }
-        Ok(Self { id, animated })
+        Ok(sprite)
+    }
+
+    fn send(&self, out: &mut impl Write, action: &str, pixels: &[u8]) -> io::Result<()> {
+        let (width, height) = self.size;
+        let mut compressed = ZlibEncoder::new(Vec::new(), Compression::fast());
+        compressed.write_all(pixels)?;
+        transmit(
+            out,
+            &format!("{action},I={},f=32,s={width},v={height},o=z", self.id),
+            &compressed.finish()?,
+        )
+    }
+
+    pub fn replace(&self, out: &mut impl Write, pixels: &[u8]) -> io::Result<()> {
+        self.send(out, "a=f,r=1,X=1", pixels)
+    }
+
+    pub fn delete(&self, out: &mut impl Write) -> io::Result<()> {
+        write!(out, "\x1b_Ga=d,d=N,I={},q=2\x1b\\", self.id)
     }
 
     pub fn place(
@@ -195,76 +218,12 @@ impl Sprite {
     }
 
     pub fn play(&self, out: &mut impl Write) -> io::Result<()> {
-        if self.animated {
-            // Loading mode stops at the last frame. Moving the window or
-            // scrolling a placement back into view does not restart the effect.
-            write!(out, "\x1b_Ga=a,I={},s=2,c=1,q=2\x1b\\", self.id)?;
-        }
-        Ok(())
-    }
-}
-
-pub struct Loader {
-    id: u32,
-    animated: bool,
-}
-
-impl Loader {
-    pub fn start(theme: &Theme, styled: bool) -> io::Result<Self> {
-        let id = number()?;
-        let animated = motion_enabled();
-        let loader = Self { id, animated };
-        let mut out = io::stderr().lock();
-        let width = crate::ui::terminal_area().map_or(32, |area| area.width);
-        let fg = rgb(theme.color(if styled { "primary" } else { "on_surface" }));
-        let bg = rgb(theme.color("surface_container_high"));
-        let frame = |phase: usize| {
-            let step = phase.min(12 - phase) as f32;
-            let start = 3. + 10. * step;
-            raster(96, 16, |x, y| {
-                if rounded(x, y, [start, 4., start + 28., 12.], 4.) {
-                    Some(fg)
-                } else if rounded(x, y, [1., 3., 95., 13.], 5.) {
-                    Some(bg)
-                } else {
-                    None
-                }
-            })
+        let state = match self.playback {
+            Playback::Still => return Ok(()),
+            // Kitty's loading mode holds the last frame.
+            Playback::Once => "s=2,c=1",
+            Playback::Loop => "s=3,v=1,c=1",
         };
-        if width >= 14 {
-            transmit(
-                &mut out,
-                &format!("a=T,I={id},f=32,s=96,v=16,c=12,r=1,C=1"),
-                &frame(0),
-            )?;
-            if animated {
-                write!(out, "\x1b_Ga=a,I={id},r=1,z=75,q=2\x1b\\")?;
-                for phase in 1..12 {
-                    transmit(
-                        &mut out,
-                        &format!("a=f,I={id},f=32,s=96,v=16,X=1,z=75"),
-                        &frame(phase),
-                    )?;
-                }
-                write!(out, "\x1b_Ga=a,I={id},s=3,v=1,c=1,q=2\x1b\\")?;
-            }
-            writeln!(out)?;
-        }
-        if animated {
-            write!(out, "\x1b]9;4;3;0\x1b\\")?;
-        }
-        out.flush()?;
-        Ok(loader)
-    }
-}
-
-impl Drop for Loader {
-    fn drop(&mut self) {
-        let mut out = io::stderr().lock();
-        let _ = write!(out, "\x1b_Ga=d,d=N,I={},q=2\x1b\\", self.id);
-        if self.animated {
-            let _ = write!(out, "\x1b]9;4;0;0\x1b\\");
-        }
-        let _ = out.flush();
+        write!(out, "\x1b_Ga=a,I={},{state},q=2\x1b\\", self.id)
     }
 }

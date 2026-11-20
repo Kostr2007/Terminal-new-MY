@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0-alpha.5
+
+- Give `myupdate` a palette-colored morphing shape and animated wave in Kitty.
+- Add `tnmy progress` and `myprogress` for command activity and measured progress from stdin.
+- Use in-place Kitty graphics for the measured bar and a text meter in other terminals.
+
 ## 0.3.0-alpha.4
 
 - Stream tree entries without animation delays between rows.

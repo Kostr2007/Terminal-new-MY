@@ -13,6 +13,10 @@ function myupdate --wraps 'tnmy update' --description 'Rebuild via nh; add --ref
     command tnmy update $argv
 end
 
+function myprogress --wraps 'tnmy progress' --description 'Show activity or measurable progress'
+    command tnmy progress $argv
+end
+
 function mycd --description 'Choose a directory in the Material file browser'
     set -l destination (command tnmy files --pick-directory $argv | string split0)
     if set -q destination[1]

@@ -1,10 +1,9 @@
-use crate::{kitty, nix_events, palette::Theme, render};
+use crate::{nix_events, palette::Theme, progress, render};
 use clap::{Args as ClapArgs, ValueEnum};
 use std::{
     ffi::OsString,
     io::{self, Write},
-    process::{Command, Stdio},
-    sync::{Arc, atomic::AtomicBool},
+    process::Command,
     time::Instant,
 };
 
@@ -175,36 +174,12 @@ pub fn run(args: Args, styled: bool, theme: &Theme, graphics: bool) -> io::Resul
     } else {
         None
     };
-    let loader = if graphics {
-        Some(kitty::Loader::start(theme, styled)?)
-    } else {
-        None
-    };
-    // Both processes receive terminal SIGINT. Keep the parent alive to wait and
-    // report exit 130; the caught disposition resets to default on child exec.
-    let registration = signal_hook::flag::register(
-        signal_hook::consts::SIGINT,
-        Arc::new(AtomicBool::new(false)),
-    )?;
-    let result = Command::new("nh")
-        .args(arguments(&args, log.as_ref().map(|file| file.path())))
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .and_then(|mut child| child.wait());
+    let loader = progress::Activity::start(theme, styled, graphics)?;
+    let result = progress::wait(
+        Command::new("nh").args(arguments(&args, log.as_ref().map(|file| file.path()))),
+    );
     drop(loader);
-    signal_hook::low_level::unregister(registration);
-    let status = result?;
-    #[cfg(unix)]
-    let code = {
-        use std::os::unix::process::ExitStatusExt;
-        status
-            .code()
-            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)) as u8
-    };
-    #[cfg(not(unix))]
-    let code = status.code().unwrap_or(1) as u8;
+    let code = result?;
     if let Some(log) = log {
         match nix_events::Summary::read(log.path()) {
             Ok(summary) if summary.records > 0 => {
@@ -221,17 +196,13 @@ pub fn run(args: Args, styled: bool, theme: &Theme, graphics: bool) -> io::Resul
         }
     }
     let elapsed = start.elapsed();
-    let role = if status.success() { "primary" } else { "error" };
+    let role = if code == 0 { "primary" } else { "error" };
     eprintln!(
         "\n{}",
         theme.paint(
             &format!(
                 "  {} · {}m {:02}s · exit {code}",
-                if status.success() {
-                    "Completed"
-                } else {
-                    "Failed"
-                },
+                if code == 0 { "Completed" } else { "Failed" },
                 elapsed.as_secs() / 60,
                 elapsed.as_secs() % 60
             ),
