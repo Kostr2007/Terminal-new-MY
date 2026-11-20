@@ -223,7 +223,7 @@ impl App {
         color: bool,
         graphics: bool,
         status: &str,
-    ) -> Option<Rect> {
+    ) -> Option<browser_art::Selection> {
         let title = Rect::new(area.x, area.y, area.width, area.height.min(1));
         frame.render_widget(
             Paragraph::new(status).style(
@@ -254,7 +254,11 @@ impl App {
             let native = selected && graphics;
             let rect = Rect::new(area.x, area.y + row as u16 + 1, area.width, 1);
             if native {
-                selection = Some(rect);
+                selection = Some(browser_art::Selection {
+                    row: rect,
+                    top: title.bottom(),
+                    bottom: area.bottom() - 1,
+                });
             }
             let surface = if selected {
                 "secondary_container"
@@ -509,12 +513,18 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
                 art.draw(layout, app.preview_png.as_ref(), &theme)?;
             }
             dirty = false;
+        } else if let Some(art) = &mut art {
+            art.tick()?;
         }
         let timeout = if app.loading || app.preview_pending || app.git_pending {
             Duration::from_millis(20)
         } else {
             Duration::from_millis(250)
         };
+        let timeout = art
+            .as_ref()
+            .and_then(browser_art::Art::frame_interval)
+            .map_or(timeout, |frame| frame.min(timeout));
         let ready = match event::poll(timeout) {
             Ok(ready) => ready,
             // Crossterm's SIGWINCH path probes stdout, then /dev/tty/tput.

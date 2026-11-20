@@ -5,8 +5,12 @@ use crate::{
     kitty::{self, Playback, Sprite},
     palette::Theme,
     render,
-    surface_art::{Edge, Row},
+    surface_art::{self, Surface},
     ui::Density,
+};
+use crossterm::{
+    cursor::{MoveToColumn, MoveUp, RestorePosition, SavePosition},
+    queue,
 };
 use std::{
     collections::HashMap,
@@ -16,7 +20,7 @@ use std::{
 };
 use unicode_width::UnicodeWidthStr;
 
-const MAX_NATIVE_ROWS: usize = 256;
+const MAX_NATIVE_ROWS: usize = 36;
 
 pub struct Design<'a> {
     theme: &'a Theme,
@@ -26,7 +30,7 @@ pub struct Design<'a> {
     placement: usize,
     wrote_path: bool,
     graphics: Option<(Viewport, Playback)>,
-    surfaces: HashMap<Row, Sprite>,
+    surfaces: HashMap<Surface, Sprite>,
 }
 
 struct Item<'a> {
@@ -77,7 +81,7 @@ impl<'a> Design<'a> {
             wrote_path: false,
             graphics: viewport
                 .filter(|size| native && size.columns >= 15)
-                .map(|size| (size, Playback::entrance(animated))),
+                .map(|size| (size, Playback::spring(animated))),
             surfaces: HashMap::new(),
         }
     }
@@ -160,29 +164,35 @@ impl<'a> Design<'a> {
         };
         let slot_width = (self.columns - 3 + gutter) / slots - gutter;
         let rows = items.len().div_ceil(slots);
-        let first_native = rows.saturating_sub(MAX_NATIVE_ROWS);
-        let header = Row {
-            fill,
-            accent,
-            edge: Edge::Top,
-        };
+        let limit = self.graphics.map_or(0, |(size, _)| {
+            size.rows.saturating_sub(1).min(MAX_NATIVE_ROWS)
+        });
+        // Only a contiguous suffix of complete screen rows can share an image.
+        let band = items
+            .chunks(slots)
+            .rev()
+            .take(limit)
+            .take_while(|row| {
+                if slots > 1 {
+                    return true;
+                }
+                let item = &row[0];
+                let details = if self.long {
+                    metadata(item.entry).width() + 2
+                } else {
+                    0
+                };
+                item.width + 4 + details <= self.columns
+            })
+            .count();
+        let native_header = band == rows && band < limit;
+        let first_native = rows - band;
         let heading = render::truncate(&format!("  {title}  {}", items.len()), self.columns);
-        let placed = rows <= MAX_NATIVE_ROWS && self.place(out, header)?;
-        self.text(out, &heading, accent, fill, placed)?;
-        self.finish_row(out, heading.width(), fill, placed)?;
+        self.text(out, &heading, accent, fill, native_header)?;
+        self.finish_row(out, heading.width(), fill, native_header)?;
         for (index, row) in items.chunks(slots).enumerate() {
-            let edge = if index + 1 == rows {
-                Edge::Bottom
-            } else {
-                Edge::Middle
-            };
-            let width = row.iter().map(|item| item.width + 2).max().unwrap_or(0);
             let details = self.long.then(|| metadata(row[0].entry));
-            let used = 2 + width + details.as_deref().map_or(0, |s| s.width() + 2);
-            // Let exceptionally long names wrap as terminal text.
-            let fits = slots > 1 || used <= self.columns;
-            let placed =
-                index >= first_native && fits && self.place(out, Row { edge, ..header })?;
+            let placed = index >= first_native;
             self.text(out, "  ", accent, fill, placed)?;
             for (col, item) in row.iter().enumerate() {
                 if col != 0 {
@@ -225,19 +235,34 @@ impl<'a> Design<'a> {
             }
             self.finish_row(out, written, fill, placed)?;
         }
-        Ok(())
+        self.place(
+            out,
+            Surface {
+                fill,
+                accent,
+                rows: band + usize::from(native_header),
+            },
+        )
     }
 
-    fn place(&mut self, out: &mut impl Write, row: Row) -> io::Result<bool> {
-        let Some((size, playback)) = self.graphics else {
-            return Ok(false);
+    fn place(&mut self, out: &mut impl Write, surface: Surface) -> io::Result<()> {
+        let Some((_, playback)) = self.graphics.filter(|_| surface.rows != 0) else {
+            return Ok(());
         };
-        if let std::collections::hash_map::Entry::Vacant(slot) = self.surfaces.entry(row) {
-            slot.insert(row.upload(out, self.theme, size.cell, self.columns, playback)?);
+        let columns = self.columns + 1;
+        out.flush()?;
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.surfaces.entry(surface) {
+            slot.insert(surface.upload(out, self.theme, columns, surface_art::CELL, playback)?);
         }
         self.placement += 1;
-        self.surfaces[&row].place(out, self.placement, self.columns, -1, None)?;
-        Ok(true)
+        queue!(
+            out,
+            SavePosition,
+            MoveUp(surface.rows as u16),
+            MoveToColumn(0)
+        )?;
+        self.surfaces[&surface].place_in(out, self.placement, (columns, surface.rows), -1, None)?;
+        queue!(out, RestorePosition)
     }
 
     fn text(

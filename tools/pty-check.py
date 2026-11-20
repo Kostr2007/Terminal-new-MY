@@ -62,8 +62,12 @@ def browser(root, width, keys, extra=(), expected_path=None, expected_code=0, en
             assert b"Preview" in resized, resized
             output += resized
         for key in keys:
-            os.write(master, key)
-            output += drain(master, 0.1)
+            if key is None:
+                output += drain(master, 0.7)
+                assert drain(master, 0.2) == b"", "selection keeps redrawing after settling"
+            else:
+                os.write(master, key)
+                output += drain(master, 0.1)
         child.wait(timeout=5)
         output += drain(master)
         assert child.returncode == expected_code, output
@@ -228,12 +232,12 @@ with tempfile.TemporaryDirectory() as temporary:
     code, listing = kitty_output(["--density", "compact", "ls", "-l", str(root), str(large)], env)
     assert code == 0 and listing.count(b"file-") == 1001
     assert b"link" in listing and " → folder".encode() in listing and b"file-01000.txt" in listing
-    assert listing.count(b"\x1b_Ga=t,I=") == 5, "reuse section edges and row surfaces"
+    assert listing.count(b"\x1b_Ga=t,I=") == 2, "one image per visible section"
     assert b"file-01000.txt" in listing[:listing.index(b"s=2,c=1")]
-    assert listing.count(b"\x1b_Ga=p,I=") == 256 + 4
+    assert listing.count(b"\x1b_Ga=p,I=") == 2
+    assert b",r=4,z=-1," in listing and b",r=24,z=-1," in listing
+    assert b",z=28," in listing
     assert "▪".encode() in listing
-    last_list_row = next(row for row in listing.split(b"\r\n") if b"file-01000.txt" in row)
-    assert b",z=-1," in last_list_row
     code, grid = kitty_output(["ls", str(large)], env)
     assert code == 0 and grid.count(b"file-") == 1001
     assert any(row.count(b"file-") >= 2 for row in grid.splitlines()), "short lists use multiple columns"
@@ -255,14 +259,15 @@ with tempfile.TemporaryDirectory() as temporary:
     ))
     (preview_root / "b.txt").write_text("Back to text preview")
     browser_env = dict(env, TNMY_GRAPHICS="kitty", NO_COLOR="1")
-    preview = browser(preview_root, 110, [b"j", b"k", b"q"], extra=("--no-git",), environment=browser_env)
+    preview = browser(preview_root, 110, [b"j", b"k", None, b"q"], extra=("--no-git",), environment=browser_env)
     assert preview.count(b"f=100,") == 2 and b"Back" in preview and b"s=2,c=1" in preview
     assert preview.count(b",z=-1,") >= 4, "selection surface follows focus"
+    assert b",Y=" in preview, "focus moves through pixel positions between rows"
     leave = preview.index(b"\x1b[?1049l")
     assert b"\x1b_Ga=d,d=N,I=" in preview[:leave]
     chosen = browser(preview_root, 35, [b"p"], extra=("--no-git", "--pick", "--no-motion"),
                      expected_path=png, environment=browser_env, resize=True)
-    assert b"f=100," in chosen and b"\x1b_Ga=f," not in chosen
+    assert b"f=100," in chosen and b"\x1b_Ga=f," not in chosen and b",Y=" not in chosen
 
     shell = os.environ.get("TNMY_TEST_SH", "/bin/sh")
     wrapped = ["progress", "--", shell, "-c", "printf 'original output'; exit 7"]

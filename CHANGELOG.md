@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0-alpha.8
+
+- Animate each `myls` section as one Kitty surface with a damped spring and monotonic opacity.
+- Move the selection in `myfiles` and `mycd` through pixel positions with a spring that carries its velocity into new targets.
+- Honor reduced motion and stop updating focus once it settles.
+
 ## 0.3.0-alpha.7
 
 - Rebuild `myls` around connected folder and file sections, adaptive columns, and right-aligned metadata in the long view.

@@ -182,6 +182,7 @@ fn icon_frame(kind: Icon, theme: &Theme, progress: f32) -> Vec<u8> {
 #[derive(Clone, Copy)]
 pub struct Viewport {
     pub columns: usize,
+    pub rows: usize,
     pub cell: (usize, usize),
 }
 
@@ -213,6 +214,7 @@ impl Viewport {
         };
         Some(Self {
             columns: usize::from(size.ws_col),
+            rows: usize::from(size.ws_row),
             cell,
         })
     }

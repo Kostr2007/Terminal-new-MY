@@ -110,6 +110,7 @@ pub fn motion_enabled() -> bool {
 pub enum Playback {
     Still,
     Once,
+    Spring,
     Loop,
 }
 
@@ -117,6 +118,14 @@ impl Playback {
     pub fn entrance(animated: bool) -> Self {
         if animated && motion_enabled() {
             Self::Once
+        } else {
+            Self::Still
+        }
+    }
+
+    pub fn spring(animated: bool) -> Self {
+        if animated && motion_enabled() {
+            Self::Spring
         } else {
             Self::Still
         }
@@ -155,6 +164,11 @@ impl Sprite {
                 return Ok(sprite);
             }
             Playback::Once => (8, 7, 36),
+            Playback::Spring => (
+                crate::motion::SECTION_STEPS + 1,
+                crate::motion::SECTION_STEPS,
+                crate::motion::SECTION_FRAME_MS,
+            ),
             Playback::Loop => (24, 24, 55),
         };
         sprite.send(out, "a=t", &frame(0.))?;
@@ -204,6 +218,18 @@ impl Sprite {
         layer: i8,
         crop_width: Option<usize>,
     ) -> io::Result<()> {
+        self.place_offset(out, placement, (columns, rows), layer, crop_width, 0)
+    }
+
+    pub fn place_offset(
+        &self,
+        out: &mut impl Write,
+        placement: usize,
+        (columns, rows): (usize, usize),
+        layer: i8,
+        crop_width: Option<usize>,
+        offset_y: usize,
+    ) -> io::Result<()> {
         write!(
             out,
             "\x1b_Ga=p,I={},p={placement},c={columns},r={rows},z={layer},C=1,q=2",
@@ -212,6 +238,9 @@ impl Sprite {
         if let Some(width) = crop_width {
             write!(out, ",w={width}")?;
         }
+        if offset_y != 0 {
+            write!(out, ",Y={offset_y}")?;
+        }
         out.write_all(b"\x1b\\")
     }
 
@@ -219,7 +248,7 @@ impl Sprite {
         let state = match self.playback {
             Playback::Still => return Ok(()),
             // Kitty's loading mode holds the last frame.
-            Playback::Once => "s=2,c=1",
+            Playback::Once | Playback::Spring => "s=2,c=1",
             Playback::Loop => "s=3,v=1,c=1",
         };
         write!(out, "\x1b_Ga=a,I={},{state},q=2\x1b\\", self.id)

@@ -5,6 +5,7 @@ mod files;
 mod git;
 mod kitty;
 mod list;
+mod motion;
 mod nix_events;
 mod palette;
 mod preview;
