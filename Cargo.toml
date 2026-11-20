@@ -1,6 +1,6 @@
 [package]
 name = "terminal-new-my"
-version = "0.2.0"
+version = "0.3.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 description = "A Material You command experience for fish and Kitty"
@@ -18,11 +18,11 @@ crossterm = "0.29"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 unicode-width = "0.2"
 libc = "0.2"
 signal-hook = "0.3"
 
-[dev-dependencies]
 tempfile = "3"
 
 [profile.release]

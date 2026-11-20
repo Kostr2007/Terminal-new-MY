@@ -60,3 +60,7 @@ end
 if not set -q TNMY_PALETTE; and set -q __myt_theme_dir
     set -gx TNMY_PALETTE "$__myt_theme_dir/palette.json"
 end
+
+function mytree --wraps 'tnmy tree' --description 'Material directory tree with Kitty graphics'
+    command tnmy tree $argv
+end

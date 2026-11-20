@@ -152,3 +152,54 @@ with tempfile.TemporaryDirectory() as temporary:
     assert b"exit 130" in result.stderr
 
 print("PTY checks passed: 10,000 entries, picking, preview scrolling, density, navigation, filtering, narrow layouts, FIFO, idle, Ctrl+C, restoration, child SIGINT")
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    (root / "folder").mkdir()
+    (root / "folder" / "example.txt").touch()
+    (root / "link").symlink_to("folder", target_is_directory=True)
+    env = dict(os.environ, TERM="xterm-kitty", KITTY_WINDOW_ID="1")
+    for key in ("MYT_PALETTE", "MYT_THEME_DIR", "MYT_CONFIG", "TNMY_PALETTE", "TNMY_GRAPHICS",
+                "TMUX", "STY", "NO_COLOR", "MYT_NO_ANIMATION", "TNMY_REDUCED_MOTION"):
+        env.pop(key, None)
+    env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"))
+    plain = subprocess.check_output([BINARY, "--graphics", "kitty", "tree", "-L", "3", str(root)], env=env)
+    assert b"\x1b_G" not in plain
+    assert plain.count(b"example.txt") == 1 and b"link@" in plain
+
+    def kitty_output(args, environment):
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 25, 100, 0, 0))
+        try:
+            with subprocess.Popen([BINARY, *args], stdin=slave, stdout=slave, stderr=slave, env=environment) as child:
+                output = drain(master, 0.5)
+                code = child.wait(timeout=5)
+                return code, output + drain(master)
+        finally:
+            os.close(master)
+            os.close(slave)
+
+    code, tree = kitty_output(["tree", str(root)], env)
+    assert code == 0 and b"\x1b_Ga=t,I=" in tree and b"\x1b_Ga=p,I=" in tree
+    assert b"example.txt" in tree
+
+    shell = os.environ.get("TNMY_TEST_SH", "/bin/sh")
+    nix = root / "nix"
+    nix.write_text(f'#!{shell}\nprintf \'%s\\n\' \'{{"json-log-path":{{}}}}\'\n')
+    nix.chmod(0o755)
+    nh = root / "nh"
+    nh.write_text(f"""#!{shell}
+printf '%s\\n' '{"{"}"action":"start","type":104,"id":1{"}"}' '{"{"}"action":"result","type":105,"id":1,"fields":[0,1,0,1]{"}"}' > "$5"
+exit 7
+""")
+    nh.chmod(0o755)
+    env["PATH"] = str(root)
+    code, active = kitty_output(["update", "--action", "build"], env)
+    assert code == 7 and b"\x1b_Ga=f,I=" in active and b"\x1b_Ga=d,d=N,I=" in active
+    assert b"0 complete" in active and b"1 failed" in active
+    logs = list((root / "state" / "terminal-new-my" / "builds").glob("*.jsonl"))
+    assert len(logs) == 1 and logs[0].stat().st_mode & 0o777 == 0o600
+    code, still = kitty_output(["update", "--action", "build"], dict(env, TNMY_REDUCED_MOTION="1"))
+    assert code == 7 and b"\x1b_Ga=T,I=" in still and b"\x1b_Ga=f,I=" not in still
+    assert b"\x1b]9;4;" not in still
+    print("Kitty checks passed: placements, redirected fallback, animated and static loaders, log and status")

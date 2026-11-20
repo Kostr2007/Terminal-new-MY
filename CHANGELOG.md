@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.0-alpha.1
+
+- Native Kitty image placements for `tree`, with a text fallback for redirected output.
+- Kitty animation frames and window progress for `nh` operations.
+- Private structured Nix logs, build totals and offline log replay.
+
 ## 0.2.0
 
 - Shared Material surfaces, state chips, action hints and compact/comfortable density.

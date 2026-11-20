@@ -1,10 +1,13 @@
 mod browser;
 mod files;
 mod git;
+mod kitty;
+mod nix_events;
 mod palette;
 mod preview;
 mod render;
 mod tool_themes;
+mod tree;
 mod ui;
 mod update;
 mod worker;
@@ -45,6 +48,15 @@ struct Cli {
         env = "TNMY_DENSITY"
     )]
     density: ui::Density,
+    /// Kitty inline graphics. Auto enables them in a direct Kitty session.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "auto",
+        env = "TNMY_GRAPHICS"
+    )]
+    graphics: kitty::Graphics,
     #[command(subcommand)]
     command: Commands,
 }
@@ -71,6 +83,8 @@ enum Commands {
         #[arg(long)]
         git: bool,
     },
+    /// Print a directory tree with inline graphics in Kitty
+    Tree(tree::Options),
     /// Browse folders, filter names and preview text
     Files {
         #[arg(default_value = ".")]
@@ -239,6 +253,12 @@ fn run(cli: Cli) -> io::Result<u8> {
             }
             Ok(0)
         }
+        Commands::Tree(options) => tree::run(
+            options,
+            &theme,
+            styled,
+            cli.graphics.enabled(io::stdout().is_terminal()),
+        ),
         Commands::Doctor { json } => {
             let report = serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
@@ -247,6 +267,7 @@ fn run(cli: Cli) -> io::Result<u8> {
                 "color": styled, "kitty": std::env::var_os("KITTY_WINDOW_ID").is_some(),
                 "term": std::env::var("TERM").unwrap_or_default(),
                 "nh": update::available(),
+                "kitty_graphics": cli.graphics.enabled(io::stdout().is_terminal()),
             });
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -282,7 +303,12 @@ fn run(cli: Cli) -> io::Result<u8> {
             }
             Ok(0)
         }
-        Commands::Update(args) => update::run(args, styled, &theme),
+        Commands::Update(args) => update::run(
+            args,
+            styled,
+            &theme,
+            cli.graphics.enabled(io::stderr().is_terminal()),
+        ),
     }
 }
 
