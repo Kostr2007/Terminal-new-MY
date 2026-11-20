@@ -230,7 +230,10 @@ with tempfile.TemporaryDirectory() as temporary:
     assert b"link" in listing and " → folder".encode() in listing and b"file-01000.txt" in listing
     assert listing.count(b"\x1b_Ga=t,I=") == 4, "reuse one badge per type and one name reveal"
     assert b"file-01000.txt" in listing[:listing.index(b"s=2,c=1")]
-    assert listing.count(b"\x1b_Ga=p,I=") == 2 * (1001 + 3)
+    assert listing.count(b"\x1b_Ga=p,I=") == 2 * (256 + 3)
+    assert "▪".encode() in listing
+    last_list_row = next(row for row in listing.split(b"\r\n") if b"file-01000.txt" in row)
+    assert b",z=1," in last_list_row
     code, static_list = kitty_output(["ls", "--no-motion", str(root)], env)
     assert code == 0 and b"\x1b_Ga=p,I=" in static_list and b"\x1b_Ga=f," not in static_list
     code, plain_list = kitty_output(["--graphics", "never", "ls", str(root)], env)

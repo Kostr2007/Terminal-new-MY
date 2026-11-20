@@ -58,7 +58,11 @@ pub struct ListGraphics {
     art: file_art::Art,
     columns: usize,
     row: usize,
+    long: bool,
 }
+
+// Huge lists can tie up Kitty's scrollback processing if every row has images.
+const NATIVE_LIST_ROWS: usize = 256;
 
 impl ListGraphics {
     pub fn stdout(long: bool, animated: bool) -> Option<Self> {
@@ -70,6 +74,7 @@ impl ListGraphics {
             art: file_art::Art::new(size.cell, kitty::Playback::entrance(animated)),
             columns: size.columns,
             row: 0,
+            long,
         })
     }
 
@@ -82,15 +87,23 @@ impl ListGraphics {
         out: &mut impl Write,
         entry: &Entry,
         theme: &Theme,
-        long: bool,
         git: bool,
         name: &str,
+        native: bool,
     ) -> io::Result<()> {
-        self.row += 1;
-        out.write_all(b"  ")?;
-        self.art
-            .icon(out, theme, self.row, Icon::for_entry(entry))?;
-        out.write_all(b"   ")?;
+        let icon = Icon::for_entry(entry);
+        if native {
+            self.row += 1;
+            out.write_all(b"  ")?;
+            self.art.icon(out, theme, self.row, icon)?;
+            out.write_all(b"   ")?;
+        } else {
+            write!(
+                out,
+                "  {}  ",
+                theme.paint(icon.glyph(), role(entry), None, true)
+            )?;
+        }
         if git {
             let status = entry.git_status.as_deref().unwrap_or("  ");
             let field = format!(" {status:2} ");
@@ -110,7 +123,7 @@ impl ListGraphics {
             }
         }
         let mut prefix = if git { 10 } else { 5 };
-        if long {
+        if self.long {
             let size = if entry.kind == "dir" {
                 "—".into()
             } else {
@@ -124,12 +137,14 @@ impl ListGraphics {
                 theme.paint(&details, "on_surface_variant", None, true)
             )?;
         }
-        self.art.label(
-            out,
-            theme,
-            self.row,
-            name.width().min(self.columns.saturating_sub(prefix)),
-        )?;
+        if native {
+            self.art.label(
+                out,
+                theme,
+                self.row,
+                name.width().min(self.columns.saturating_sub(prefix)),
+            )?;
+        }
         let target = entry
             .link_target
             .as_ref()
@@ -211,10 +226,11 @@ pub fn listing(
                 .as_deref()
                 .is_some_and(|s| !s.trim().is_empty())
         });
-    for entry in entries {
+    let first_native = entries.len().saturating_sub(NATIVE_LIST_ROWS);
+    for (index, entry) in entries.iter().enumerate() {
         let name = safe(&entry.name);
         if let Some(graphics) = &mut graphics {
-            graphics.entry(out, entry, theme, long, show_git, &name)?;
+            graphics.entry(out, entry, theme, show_git, &name, index >= first_native)?;
         } else if styled {
             let badge = format!(
                 " {:5} {} ",

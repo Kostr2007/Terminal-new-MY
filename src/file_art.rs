@@ -17,6 +17,15 @@ pub enum Icon {
 }
 
 impl Icon {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Folder => "▰",
+            Self::File => "▪",
+            Self::Link => "◇",
+            Self::Special => "·",
+        }
+    }
+
     pub fn for_entry(entry: &Entry) -> Self {
         match entry.kind {
             "dir" => Self::Folder,

@@ -22,8 +22,10 @@ use std::{io, path::PathBuf, time::Duration};
 
 struct Restore;
 fn unavailable_size_probe(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::NotFound
-        || matches!(error.raw_os_error(), Some(libc::ENOTTY | libc::ENOENT))
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::WouldBlock
+    ) || matches!(error.raw_os_error(), Some(libc::ENOTTY | libc::ENOENT))
 }
 impl Drop for Restore {
     fn drop(&mut self) {
@@ -460,7 +462,8 @@ pub fn run(options: Options, mut theme: Theme, color: bool) -> io::Result<Option
         let ready = match event::poll(timeout) {
             Ok(ready) => ready,
             // Crossterm's SIGWINCH path probes stdout, then /dev/tty/tput.
-            // A picker may have none of these; stderr was already resized above.
+            // A picker may have none of these. A failed tput can also report
+            // a stale EAGAIN; the UI probes stderr independently.
             Err(e) if unavailable_size_probe(&e) => continue,
             Err(e) => return Err(e),
         };
