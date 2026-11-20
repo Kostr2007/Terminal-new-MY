@@ -129,7 +129,7 @@ fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
             None
         }
     });
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = (f32::from(pixel[3]) * (0.10 + 0.90 * eased)).round() as u8;
     }
     pixels
