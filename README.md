@@ -5,14 +5,19 @@ Material You для повседневной работы в терминале:
 Работает в [Kitty Material You](https://github.com/Kostr2007/Kitty-Material-You)
 и обычных терминалах с UTF-8.
 
-**v0.3.0-alpha.1** добавляет нативную графику Kitty поверх обычного вывода команд.
-В fish доступна команда `mytree -L 3`. Иконки дерева окрашиваются по палитре `myt`,
-а имена и ветви остаются текстом в истории терминала.
+**v0.3.0-alpha.2** добавляет анимацию `mytree` внутри истории Kitty. Первые
+12 строк раскрываются каскадом. Иконки подхватывают палитру `myt`, плавно
+появляются и остаются на последнем кадре. Ветви и имена можно выделить и
+скопировать. Для длинного дерева остальные строки выводятся сразу после каскада.
 
-![Дерево файлов с графикой Kitty](docs/screenshots/kitty-tree.png)
+![Каскад mytree в Kitty](docs/screenshots/kitty-tree-motion.gif)
+
+Хореография основана на каскаде из [Card Motion Studio](https://github.com/Kostr2007/Material-You-Terminal/blob/main/tools/card_studio.py)
+и передаче кадров из [Logo Motion Studio](https://github.com/Kostr2007/Material-You-Terminal/blob/main/tools/logo_studio.py).
 
 ```fish
 mytree -L 3
+mytree --no-motion -L 3
 myupdate --action build --flake /etc/nixos
 tnmy --graphics never tree -L 2
 ```
@@ -25,7 +30,8 @@ tnmy --graphics never tree -L 2
 
 Графика включается автоматически в прямом сеансе Kitty. `--graphics kitty`
 включает её явно в интерактивном терминале, а `--graphics never` отключает.
-Переменная `TNMY_REDUCED_MOTION=1` оставляет неподвижный индикатор.
+Переменные `TNMY_REDUCED_MOTION=1` и `MYT_NO_ANIMATION=1` оставляют графику
+неподвижной. `mytree --no-motion` отключает движение для одного вызова.
 Перенаправленное дерево печатается текстом. У `tree` по умолчанию два уровня,
 `-a` показывает скрытые имена, символические ссылки показаны отдельно.
 

@@ -93,7 +93,11 @@ fn raster(width: usize, height: usize, sample: impl Fn(f32, f32) -> Option<[u8; 
     pixels
 }
 
-pub fn upload_icon(out: &mut impl Write, id: u32, kind: usize, theme: &Theme) -> io::Result<()> {
+pub fn motion_enabled() -> bool {
+    env::var_os("TNMY_REDUCED_MOTION").is_none() && env::var_os("MYT_NO_ANIMATION").is_none()
+}
+
+fn icon_frame(kind: usize, theme: &Theme, progress: f32) -> Vec<u8> {
     let (foreground, background) = match kind {
         0 => ("on_primary_container", "primary_container"),
         1 => ("on_secondary_container", "secondary_container"),
@@ -101,7 +105,13 @@ pub fn upload_icon(out: &mut impl Write, id: u32, kind: usize, theme: &Theme) ->
     };
     let fg = rgb(theme.accessible(foreground, background));
     let bg = rgb(theme.color(background));
-    let pixels = raster(24, 24, |x, y| {
+    // The cubic ease-out also drives the row reveal in Material-You-Terminal's
+    // card studio. The endpoint uses the exact geometry of the static icon.
+    let eased = 1. - (1. - progress).powi(3);
+    let scale = 0.50 + 0.50 * eased;
+    let mut pixels = raster(24, 24, |x, y| {
+        let x = 12. + (x - 12.) / scale;
+        let y = 12. + (y - 12.) / scale;
         let mark = match kind {
             0 => rounded(x, y, [5., 9., 19., 18.], 2.) || rounded(x, y, [5., 6., 12., 13.], 2.),
             1 => {
@@ -119,14 +129,64 @@ pub fn upload_icon(out: &mut impl Write, id: u32, kind: usize, theme: &Theme) ->
             None
         }
     });
-    transmit(out, &format!("a=t,I={id},f=32,s=24,v=24"), &pixels)
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[3] = (f32::from(pixel[3]) * (0.10 + 0.90 * eased)).round() as u8;
+    }
+    pixels
 }
 
-pub fn place_icon(out: &mut impl Write, id: u32, placement: usize) -> io::Result<()> {
-    write!(
-        out,
-        "\x1b_Ga=p,I={id},p={placement},c=2,r=1,C=1,q=2\x1b\\  "
-    )
+pub struct TreeIcon {
+    id: u32,
+    animated: bool,
+    started: bool,
+}
+
+impl TreeIcon {
+    pub fn upload(
+        out: &mut impl Write,
+        kind: usize,
+        theme: &Theme,
+        animated: bool,
+    ) -> io::Result<Self> {
+        const STEPS: u8 = 7;
+        const GAP_MS: u8 = 40;
+        let id = number()?;
+        let progress = if animated { 0. } else { 1. };
+        transmit(
+            out,
+            &format!("a=t,I={id},f=32,s=24,v=24"),
+            &icon_frame(kind, theme, progress),
+        )?;
+        if animated {
+            write!(out, "\x1b_Ga=a,I={id},r=1,z={GAP_MS},q=2\x1b\\")?;
+            for step in 1..=STEPS {
+                transmit(
+                    out,
+                    &format!("a=f,I={id},f=32,s=24,v=24,X=1,z={GAP_MS}"),
+                    &icon_frame(kind, theme, f32::from(step) / f32::from(STEPS)),
+                )?;
+            }
+        }
+        Ok(Self {
+            id,
+            animated,
+            started: false,
+        })
+    }
+
+    pub fn place(&mut self, out: &mut impl Write, placement: usize) -> io::Result<()> {
+        let id = self.id;
+        write!(
+            out,
+            "\x1b_Ga=p,I={id},p={placement},c=2,r=1,C=1,q=2\x1b\\  "
+        )?;
+        if self.animated && !self.started {
+            // Loading mode holds the last frame while the image lives in scrollback.
+            write!(out, "\x1b_Ga=a,I={id},s=2,c=1,q=2\x1b\\")?;
+            self.started = true;
+        }
+        Ok(())
+    }
 }
 
 pub struct Loader {
@@ -137,8 +197,7 @@ pub struct Loader {
 impl Loader {
     pub fn start(theme: &Theme, styled: bool) -> io::Result<Self> {
         let id = number()?;
-        let animated = env::var_os("TNMY_REDUCED_MOTION").is_none()
-            && env::var_os("MYT_NO_ANIMATION").is_none();
+        let animated = motion_enabled();
         let loader = Self { id, animated };
         let mut out = io::stderr().lock();
         let width = crate::ui::terminal_area().map_or(32, |area| area.width);

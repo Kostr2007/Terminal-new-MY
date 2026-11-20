@@ -8,6 +8,7 @@ use clap::Args;
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 #[derive(Args)]
@@ -19,13 +20,59 @@ pub struct Options {
     /// Number of levels below the root.
     #[arg(short = 'L', long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=16))]
     depth: u8,
+    /// Display the complete tree immediately.
+    #[arg(long)]
+    no_motion: bool,
+}
+
+const WAVE_SIZE: usize = 4;
+const WAVES: usize = 3;
+const STAGGER: Duration = Duration::from_millis(18);
+
+struct TreeGraphics {
+    icons: [[Option<kitty::TreeIcon>; 3]; WAVES + 1],
+    start: Option<Instant>,
+}
+
+impl TreeGraphics {
+    fn place(
+        &mut self,
+        out: &mut impl Write,
+        theme: &Theme,
+        row: usize,
+        kind: usize,
+    ) -> io::Result<()> {
+        let wave = if self.start.is_some() {
+            ((row - 1) / WAVE_SIZE).min(WAVES)
+        } else {
+            WAVES
+        };
+        let slot = &mut self.icons[wave][kind];
+        if slot.is_none() {
+            *slot = Some(kitty::TreeIcon::upload(out, kind, theme, wave < WAVES)?);
+        }
+        slot.as_mut().expect("icon was uploaded").place(out, row)
+    }
+
+    fn pace(&self, out: &mut impl Write, row: usize) -> io::Result<()> {
+        if let Some(start) = self.start.filter(|_| row <= WAVES * WAVE_SIZE) {
+            out.flush()?;
+            // Time from the first row, so a slow filesystem never adds delay.
+            if let Some(delay) =
+                (start + STAGGER * row as u32).checked_duration_since(Instant::now())
+            {
+                std::thread::sleep(delay);
+            }
+        }
+        Ok(())
+    }
 }
 
 struct Tree<'a, W> {
     out: W,
     theme: &'a Theme,
     styled: bool,
-    ids: Option<[u32; 3]>,
+    graphics: Option<TreeGraphics>,
     count: usize,
     failed: bool,
 }
@@ -59,6 +106,9 @@ impl<W: Write> Tree<'_, W> {
                 break;
             }
             self.count += 1;
+            if let Some(graphics) = &self.graphics {
+                graphics.pace(&mut self.out, self.count)?;
+            }
             let last = index + 1 == len;
             let branch = if last { "└─ " } else { "├─ " };
             write!(
@@ -66,13 +116,13 @@ impl<W: Write> Tree<'_, W> {
                 "{prefix}{}",
                 self.theme.paint(branch, "outline", None, self.styled)
             )?;
-            if let Some(ids) = self.ids.filter(|_| self.count <= 160) {
+            if let Some(graphics) = self.graphics.as_mut().filter(|_| self.count <= 160) {
                 let kind = match item.kind {
                     "dir" => 0,
                     "file" => 1,
                     _ => 2,
                 };
-                kitty::place_icon(&mut self.out, ids[kind], self.count)?;
+                graphics.place(&mut self.out, self.theme, self.count, kind)?;
             }
             let suffix = match item.kind {
                 "dir" => "/",
@@ -114,15 +164,6 @@ pub fn run(options: Options, theme: &Theme, styled: bool, graphics: bool) -> io:
     }
     let entries = files::read(&root, options.all, Sort::Name)?;
     let mut out = io::stdout().lock();
-    let ids = if graphics {
-        let ids = [kitty::number()?, kitty::number()?, kitty::number()?];
-        for (kind, id) in ids.into_iter().enumerate() {
-            kitty::upload_icon(&mut out, id, kind, theme)?;
-        }
-        Some(ids)
-    } else {
-        None
-    };
     writeln!(
         out,
         "{}",
@@ -137,7 +178,10 @@ pub fn run(options: Options, theme: &Theme, styled: bool, graphics: bool) -> io:
         out,
         theme,
         styled,
-        ids,
+        graphics: graphics.then(|| TreeGraphics {
+            icons: Default::default(),
+            start: (kitty::motion_enabled() && !options.no_motion).then(Instant::now),
+        }),
         count: 0,
         failed: false,
     };

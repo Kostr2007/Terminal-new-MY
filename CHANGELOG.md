@@ -1,5 +1,10 @@
 # Changes
 
+## 0.3.0-alpha.2
+
+- Cascading tree rows and palette-colored icons with a one-shot Kitty animation.
+- Static tree graphics with `--no-motion` and reduced-motion settings.
+
 ## 0.3.0-alpha.1
 
 - Native Kitty image placements for `tree`, with a text fallback for redirected output.

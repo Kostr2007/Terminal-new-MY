@@ -182,6 +182,18 @@ with tempfile.TemporaryDirectory() as temporary:
     code, tree = kitty_output(["tree", str(root)], env)
     assert code == 0 and b"\x1b_Ga=t,I=" in tree and b"\x1b_Ga=p,I=" in tree
     assert b"example.txt" in tree
+    assert b"\x1b_Ga=f,I=" in tree and b"s=2,c=1" in tree
+    assert b"\x1b[?1049h" not in tree
+    for args, settings in (
+        (["tree", "--no-motion", str(root)], env),
+        (["tree", str(root)], dict(env, TNMY_REDUCED_MOTION="1")),
+        (["tree", str(root)], dict(env, MYT_NO_ANIMATION="1")),
+    ):
+        code, still_tree = kitty_output(args, settings)
+        assert code == 0 and b"\x1b_Ga=p,I=" in still_tree
+        assert b"\x1b_Ga=f,I=" not in still_tree and b"example.txt" in still_tree
+    code, text_tree = kitty_output(["tree", str(root)], dict(env, TERM="xterm-256color"))
+    assert code == 0 and b"example.txt" in text_tree and b"\x1b_G" not in text_tree
 
     shell = os.environ.get("TNMY_TEST_SH", "/bin/sh")
     nix = root / "nix"
@@ -202,4 +214,4 @@ exit 7
     code, still = kitty_output(["update", "--action", "build"], dict(env, TNMY_REDUCED_MOTION="1"))
     assert code == 7 and b"\x1b_Ga=T,I=" in still and b"\x1b_Ga=f,I=" not in still
     assert b"\x1b]9;4;" not in still
-    print("Kitty checks passed: placements, redirected fallback, animated and static loaders, log and status")
+    print("Kitty checks passed: animated and static tree, placements, redirected fallback, animated and static loaders, log and status")
